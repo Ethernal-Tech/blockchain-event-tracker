@@ -28,7 +28,7 @@ type BlockProvider interface {
 // EventTrackerConfig is a struct that holds configuration of a EventTracker
 type EventTrackerConfig struct {
 	// RPCEndpoint is the full json rpc url on some node on a tracked chain
-	RPCEndpoint string
+	RPCEndpoint string `json:"rpcEndpoint"`
 
 	// NumBlockConfirmations defines how many blocks must pass from a certain block,
 	// to consider that block as final on the tracked chain.
@@ -36,14 +36,14 @@ type EventTrackerConfig struct {
 	// processed if it hits this confirmation mark.
 	// (e.g., NumBlockConfirmations = 3, and if the last tracked block is 10,
 	// events from block 10, will only be processed when we get block 13 from the tracked chain)
-	NumBlockConfirmations uint64
+	NumBlockConfirmations uint64 `json:"numBlockConfirmations"`
 
 	// SyncBatchSize defines a batch size of blocks that will be gotten from tracked chain,
 	// when tracker is out of sync and needs to sync a number of blocks.
 	// (e.g., SyncBatchSize = 10, trackers last processed block is 10, latest block on tracked chain is 100,
 	// it will get blocks 11-20, get logs from confirmed blocks of given batch, remove processed confirm logs
 	// from memory, and continue to the next batch)
-	SyncBatchSize uint64
+	SyncBatchSize uint64 `json:"syncBatchSize"`
 
 	// MaxBacklogSize defines how many blocks we will sync up from the latest block on tracked chain.
 	// If a node that has tracker, was offline for days, months, a year, it will miss a lot of blocks.
@@ -51,26 +51,26 @@ type EventTrackerConfig struct {
 	// logic with them, continuing consensus and relayer stuff.
 	// In order to not waste too much unnecessary time in syncing all those blocks, with MaxBacklogSize,
 	// we tell the tracker to sync only latestBlock.Number - MaxBacklogSize number of blocks.
-	MaxBacklogSize uint64
+	MaxBacklogSize uint64 `json:"maxBacklogSize"`
 
 	// PollInterval defines a time interval in which tracker polls json rpc node
 	// for latest block on the tracked chain.
-	PollInterval time.Duration
-
-	// Logger is the logger instance for event tracker
-	Logger hcf.Logger
+	PollInterval time.Duration `json:"pollInterval"`
 
 	// LogFilter defines which events are tracked and from which contracts on the tracked chain
-	LogFilter map[ethgo.Address][]ethgo.Hash
+	LogFilter map[ethgo.Address][]ethgo.Hash `json:"logFilter"`
+
+	// Logger is the logger instance for event tracker
+	Logger hcf.Logger `json:"-"`
 
 	// Store is the store implementation for data that tracker saves (lastProcessedBlock and logs)
-	Store store.EventTrackerStore
+	Store store.EventTrackerStore `json:"-"`
 
 	// BlockProvider is the implementation of a provider that returns blocks and logs from tracked chain
-	BlockProvider BlockProvider
+	BlockProvider BlockProvider `json:"-"`
 
 	// EventSubscriber is the subscriber that requires events tracked by the event tracker
-	EventSubscriber EventSubscriber
+	EventSubscriber EventSubscriber `json:"-"`
 }
 
 // EventTracker represents a tracker for events on desired contracts on some chain
