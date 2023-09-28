@@ -418,7 +418,8 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		// just mock the call, it will use the provider.logs map to handle proper returns
 		blockProviderMock.On("GetLogs", mock.Anything).Return(nil, nil).Times(len(logs))
 		// just mock the call, it will use the provider.blocks map to handle proper returns
-		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(int(numOfMissedBlocks + numOfCachedBlocks))
+		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(
+			int(numOfMissedBlocks + numOfCachedBlocks))
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0))
 		require.NoError(t, err)
@@ -582,7 +583,8 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 	})
 }
 
-func createTestTrackerConfig(t *testing.T, numBlockConfirmations, batchSize, maxBacklogSize uint64) *EventTrackerConfig {
+func createTestTrackerConfig(t *testing.T,
+	numBlockConfirmations, batchSize, maxBacklogSize uint64) *EventTrackerConfig {
 	t.Helper()
 
 	return &EventTrackerConfig{

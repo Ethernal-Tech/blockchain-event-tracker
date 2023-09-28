@@ -281,7 +281,11 @@ func TestTrackerBlockContainer_AddBlockAndLastCachedBlock(t *testing.T) {
 	tbc := NewTrackerBlockContainer(0)
 
 	for i := uint64(1); i <= uint64(numOfBlocks); i++ {
-		require.NoError(t, tbc.AddBlock(&ethgo.Block{Number: i, Hash: ethgo.Hash{byte(i)}, ParentHash: ethgo.Hash{byte(i - 1)}}))
+		require.NoError(t, tbc.AddBlock(&ethgo.Block{
+			Number:     i,
+			Hash:       ethgo.Hash{byte(i)},
+			ParentHash: ethgo.Hash{byte(i - 1)},
+		}))
 		require.Equal(t, i, tbc.LastCachedBlock())
 	}
 

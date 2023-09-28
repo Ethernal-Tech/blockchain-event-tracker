@@ -10,20 +10,21 @@ on:
 
 jobs:
   lint:
-    name: Run Go Lint
+    name: Lint
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
-
-    - name: Set up Go
-      uses: actions/setup-go@v2
+    - name: Setup Go
+      uses: actions/setup-go@v3
       with:
-        go-version: 1.21.x 
+        go-version: 1.20.x
+
+    - name: Checkout code
+      uses: actions/checkout@v3
 
     - name: Install golangci-lint
-      run:  go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.42.1
+      run:  go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.49
 
-    - name: Run golangci-lint
-      run: golangci-lint run --timeout 10m --verbose
+    - name: Lint
+      uses: golangci/golangci-lint-action@v3
+      with:
+        args: --timeout 10m --verbose

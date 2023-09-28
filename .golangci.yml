@@ -10,7 +10,7 @@ run:
     - tests
 
 service:
-  golangci-lint-version: 1.42.1
+  golangci-lint-version: 1.49.0
 
 linters:
   disable-all: true

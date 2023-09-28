@@ -64,7 +64,8 @@ func FuzzGetNewState(f *testing.F) {
 
 		providerMock := new(mockProvider)
 		for blockNum := data.LastProcessed + 1; blockNum <= data.Number; blockNum++ {
-			providerMock.On("GetBlockByNumber", ethgo.BlockNumber(blockNum), false).Return(&ethgo.Block{Number: blockNum}, nil).Once()
+			providerMock.On("GetBlockByNumber", ethgo.BlockNumber(blockNum), false).Return(
+				&ethgo.Block{Number: blockNum}, nil).Once()
 		}
 
 		logs := []*ethgo.Log{

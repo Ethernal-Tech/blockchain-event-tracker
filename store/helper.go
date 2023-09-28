@@ -12,7 +12,8 @@ import (
 	"github.com/umbracle/ethgo/abi"
 )
 
-var StateSyncEventABI = abi.MustNewEvent("event StateSynced(uint256 indexed id, address indexed sender, address indexed receiver, bytes data)")
+var StateSyncEventABI = abi.MustNewEvent("event StateSynced(uint256 indexed id, " +
+	"address indexed sender, address indexed receiver, bytes data)")
 
 func CreateTestLogForStateSyncEvent(t *testing.T, blockNumber, logIndex uint64) *ethgo.Log {
 	t.Helper()

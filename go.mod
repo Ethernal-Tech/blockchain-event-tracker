@@ -1,6 +1,6 @@
 module github.com/goran-ethernal/eventtracker
 
-go 1.21.1
+go 1.20
 
 require (
 	github.com/hashicorp/go-hclog v1.5.0
