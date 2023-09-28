@@ -300,6 +300,16 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 		startBlock = latestBlock.Number - e.config.NumOfBlocksToReconcile
 	}
 
+	// optimize call for logs if we have enough missed confirmed blocks
+	lastConfirmedBlock := latestBlock.Number - e.config.NumBlockConfirmations
+	if lastConfirmedBlock > startBlock {
+		if err := e.getLogsForBlocksInBatches(startBlock, lastConfirmedBlock); err != nil {
+			return err
+		}
+
+		startBlock = lastConfirmedBlock + 1
+	}
+
 	// get blocks in batches
 	for i := startBlock; i < latestBlock.Number; i += e.config.SyncBatchSize {
 		end := i + e.config.SyncBatchSize - 1
@@ -357,9 +367,7 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 	return nil
 }
 
-// ProcessLogs retrieves logs for confirmed blocks, filters them based on certain criteria,
-// passes them to the subscriber, and stores them in a store.
-// It also removes the processed blocks from the block container.
+// processLogs processes logs for confirmed blocks
 //
 // Returns:
 // - nil if there are no confirmed blocks.
@@ -376,6 +384,20 @@ func (e *EventTracker) processLogs() error {
 	fromBlock := confirmedBlocks[0]
 	toBlock := confirmedBlocks[len(confirmedBlocks)-1]
 
+	if err := e.getLogsForBlocks(fromBlock, toBlock); err != nil {
+		return err
+	}
+
+	return e.blockContainer.RemoveBlocks(fromBlock, toBlock)
+}
+
+// getLogsForBlocks retrieves logs for given blocks, filters them based on certain criteria,
+// passes them to the subscriber, and stores them in a store.
+// It also removes the processed blocks from the block container.
+//
+// Returns:
+// - An error if there is an error retrieving logs from the external provider or saving logs to the store.
+func (e *EventTracker) getLogsForBlocks(fromBlock, toBlock uint64) error {
 	e.config.Logger.Debug("Processing logs for blocks", "fromBlock", fromBlock, "toBlock", toBlock)
 
 	logs, err := e.config.BlockProvider.GetLogs(e.getLogsQuery(fromBlock, toBlock))
@@ -430,14 +452,47 @@ func (e *EventTracker) processLogs() error {
 		return err
 	}
 
-	if err := e.blockContainer.RemoveBlocks(fromBlock, toBlock); err != nil {
-		return fmt.Errorf("could not remove processed blocks. Err: %w", err)
-	}
-
 	e.config.Logger.Debug("Processing logs for blocks finished",
 		"fromBlock", fromBlock,
 		"toBlock", toBlock,
 		"numOfLogs", len(filteredLogs))
+
+	return nil
+}
+
+// getLogsForBlocksInBatches is a method of the EventTracker struct that is responsible for getting logs for blocks in batches.
+//
+// Example Usage:
+//
+//	e.getLogsForBlocksInBatches(100, 200)
+//
+// Inputs:
+//
+//	fromBlock (uint64): The starting block number.
+//	toBlock (uint64): The ending block number.
+//
+// Returns:
+//
+//	error: If there is an error during retrieving logs from the external provider
+//		or saving logs to the store. Otherwise, return nil.
+func (e *EventTracker) getLogsForBlocksInBatches(fromBlock, toBlock uint64) error {
+	if toBlock < fromBlock {
+		return fmt.Errorf("can not get logs for blocks in batches. ToBlock: %d, lower than FromBlock: %d",
+			toBlock, fromBlock)
+	}
+
+	for i := fromBlock; i <= toBlock; i += e.config.SyncBatchSize {
+		end := i + e.config.SyncBatchSize - 1
+		if end > toBlock {
+			end = toBlock
+		}
+
+		if err := e.getLogsForBlocks(i, end); err != nil {
+			return err
+		}
+
+		e.blockContainer.UpdateLastProcessedBlockLocked(end)
+	}
 
 	return nil
 }

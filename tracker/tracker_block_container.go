@@ -64,6 +64,13 @@ func (t *TrackerBlockContainer) LastProcessedBlockLocked() uint64 {
 	return t.lastProcessedConfirmedBlock
 }
 
+// UpdateLastProcessedBlockLocked updates the number of last processed block for logs
+// Function assumes that the write lock is already acquired before accessing
+// the lastProcessedConfirmedBlock field
+func (t *TrackerBlockContainer) UpdateLastProcessedBlockLocked(lastProcessed uint64) {
+	t.lastProcessedConfirmedBlock = lastProcessed
+}
+
 // LastCachedBlock returns the block number of the last cached block for processing
 //
 // Example Usage:

@@ -321,19 +321,20 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		// mock logs return so that no confirmed block has any logs we need
 		logs := []*ethgo.Log{
 			store.CreateTestLogForStateSyncEvent(t, 1, 1),
-			store.CreateTestLogForStateSyncEvent(t, 2, 3),
 			store.CreateTestLogForStateSyncEvent(t, 6, 11),
 		}
 		blockProviderMock.logs = logs
 		// we will have three groups of confirmed blocks
 		// syncing blocks: 1, 2, 3, 4, 5, 6, 7, 8, 9
-		// first batch of gotten blocks: 1, 2, 3, 4 - confirmed blocks: 1
-		// second batch of gotten blocks: 5, 6, 7, 8 - confirmed blocks: 2, 3, 4, 5
-		// process the latest block as well (block 9) - confirmed blocks: 6
+		// first we will get logs for confirmed missed blocks in batches:
+		//   - first batch of logs: 1, 2, 3, 4
+		//   - second batch of logs: 5, 6
+		// second, we get the rest of the unconfirmed blocks in batches: 7, 8, 9
 		// just mock the call, it will use the provider.logs map to handle proper returns
 		blockProviderMock.On("GetLogs", mock.Anything).Return(nil, nil).Times(len(logs))
 		// just mock the call, it will use the provider.blocks map to handle proper returns
-		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(int(numOfMissedBlocks))
+		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(
+			int(numOfMissedBlocks - (numOfMissedBlocks + 1 - numBlockConfirmations)))
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0))
 		require.NoError(t, err)
@@ -402,24 +403,26 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		// mock logs return so that no confirmed block has any logs we need
 		logs := []*ethgo.Log{
 			store.CreateTestLogForStateSyncEvent(t, 1, 1),
-			store.CreateTestLogForStateSyncEvent(t, 2, 3),
-			store.CreateTestLogForStateSyncEvent(t, 6, 11),
-			store.CreateTestLogForStateSyncEvent(t, 10, 1),
+			store.CreateTestLogForStateSyncEvent(t, 6, 3),
+			store.CreateTestLogForStateSyncEvent(t, 9, 11),
 		}
+
 		blockProviderMock.logs = logs
 		// we will have three groups of confirmed blocks
 		// have cached blocks, 1, 2, 3, 4
 		// cleans state
 		// syncing blocks: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
-		// first batch of gotten blocks: 1, 2, 3, 4 - confirmed blocks: 1
-		// second batch of gotten blocks: 5, 6, 7, 8 - confirmed blocks: 2, 3, 4, 5
-		// third batch of gotten blocks: 9, 10, 11, 12 - confirmed blocks: 6, 7, 8, 9
-		// process the latest block as well (block 13) - confirmed blocks: 10
+		// first we will get logs for confirmed missed blocks in batches:
+		//   - first batch of logs: 1, 2, 3, 4
+		//   - second batch of logs: 5, 6, 7, 8
+		//   - third batch of logs: 9, 10
+		// second, we get the rest of the unconfirmed blocks in batches: 10, 11, 12
+		// process the latest block as well (block 13) - confirmed blocks: 0
 		// just mock the call, it will use the provider.logs map to handle proper returns
 		blockProviderMock.On("GetLogs", mock.Anything).Return(nil, nil).Times(len(logs))
 		// just mock the call, it will use the provider.blocks map to handle proper returns
 		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(
-			int(numOfMissedBlocks + numOfCachedBlocks))
+			int(numOfMissedBlocks - (numOfMissedBlocks + 1 - numBlockConfirmations)))
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0))
 		require.NoError(t, err)
@@ -501,7 +504,6 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		// mock logs return so that no confirmed block has any logs we need
 		logs := []*ethgo.Log{
 			store.CreateTestLogForStateSyncEvent(t, 1, 1),
-			store.CreateTestLogForStateSyncEvent(t, 2, 3),
 		}
 		blockProviderMock.logs = logs
 		// we will have 2 groups of confirmed blocks
@@ -512,9 +514,21 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		// first batch of gotten blocks: 1, 2, 3, 4 - confirmed blocks: 1
 		// process the latest block as well (block 5) - confirmed blocks: 2
 		// just mock the call, it will use the provider.logs map to handle proper returns
+
+		// we will have three groups of confirmed blocks
+		// have cached blocks, 1, 2, 3, 4
+		// notice there was a reorg on block 5
+		// cleans state
+		// syncing blocks: 1, 2, 3, 4, 5
+		// first we will get logs for confirmed missed blocks in batches:
+		//   - first batch of logs: 1, 2
+		// second, we get the rest of the unconfirmed blocks in batches: 3, 4
+		// process the latest block as well (block 5) - confirmed blocks: 0
+		// just mock the call, it will use the provider.logs map to handle proper returns
 		blockProviderMock.On("GetLogs", mock.Anything).Return(nil, nil).Times(len(logs))
 		// just mock the call, it will use the provider.blocks map to handle proper returns
-		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(int(numOfCachedBlocks))
+		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(
+			int(numOfCachedBlocks - (numOfCachedBlocks - numBlockConfirmations + 1)))
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0))
 		require.NoError(t, err)
