@@ -460,7 +460,8 @@ func (e *EventTracker) getLogsForBlocks(fromBlock, toBlock uint64) error {
 	return nil
 }
 
-// getLogsForBlocksInBatches is a method of the EventTracker struct that is responsible for getting logs for blocks in batches.
+// getLogsForBlocksInBatches is a method of the EventTracker struct
+// that is responsible for getting logs for blocks in batches.
 //
 // Example Usage:
 //
