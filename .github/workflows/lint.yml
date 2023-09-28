@@ -1,0 +1,29 @@
+name: Lint
+on:
+  push:
+    branches:
+      - '*'
+    pull_request:
+      branches:
+      - '*'
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Run Go Lint
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: 1.21.x 
+
+    - name: Install golangci-lint
+      run:  go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.42.1
+
+    - name: Run golangci-lint
+      run: golangci-lint run --timeout 10m --verbose
