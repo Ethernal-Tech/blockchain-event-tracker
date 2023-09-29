@@ -45,13 +45,13 @@ type EventTrackerConfig struct {
 	// from memory, and continue to the next batch)
 	SyncBatchSize uint64 `json:"syncBatchSize"`
 
-	// MaxBacklogSize defines how many blocks we will sync up from the latest block on tracked chain.
+	// NumOfBlocksToReconcile defines how many blocks we will sync up from the latest block on tracked chain.
 	// If a node that has tracker, was offline for days, months, a year, it will miss a lot of blocks.
 	// In the meantime, we expect the rest of nodes to have collected the desired events and did their
 	// logic with them, continuing consensus and relayer stuff.
-	// In order to not waste too much unnecessary time in syncing all those blocks, with MaxBacklogSize,
-	// we tell the tracker to sync only latestBlock.Number - MaxBacklogSize number of blocks.
-	MaxBacklogSize uint64 `json:"maxBacklogSize"`
+	// In order to not waste too much unnecessary time in syncing all those blocks, with NumOfBlocksToReconcile,
+	// we tell the tracker to sync only latestBlock.Number - NumOfBlocksToReconcile number of blocks.
+	NumOfBlocksToReconcile uint64 `json:"maxBacklogSize"`
 
 	// PollInterval defines a time interval in which tracker polls json rpc node
 	// for latest block on the tracked chain.
@@ -119,16 +119,16 @@ func NewEventTracker(config *EventTrackerConfig) (*EventTracker, error) {
 
 	definiteLastProcessedBlock := lastProcessedBlock
 
-	if lastProcessedBlock == 0 && config.MaxBacklogSize > 0 {
+	if lastProcessedBlock == 0 && config.NumOfBlocksToReconcile > 0 {
 		latestBlock, err := config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
 		if err != nil {
 			return nil, err
 		}
 
-		if latestBlock.Number > config.MaxBacklogSize {
+		if latestBlock.Number > config.NumOfBlocksToReconcile {
 			// if this is a fresh start, then we should start syncing from
 			// latestBlock.Number - MaxBacklogSize
-			definiteLastProcessedBlock = latestBlock.Number - config.MaxBacklogSize
+			definiteLastProcessedBlock = latestBlock.Number - config.NumOfBlocksToReconcile
 		}
 	}
 
@@ -174,7 +174,7 @@ func (e *EventTracker) Start() error {
 		"numBlockConfirmations", e.config.NumBlockConfirmations,
 		"pollInterval", e.config.PollInterval,
 		"syncBatchSize", e.config.SyncBatchSize,
-		"maxBacklogSize", e.config.MaxBacklogSize,
+		"maxBacklogSize", e.config.NumOfBlocksToReconcile,
 		"logFilter", e.config.LogFilter,
 	)
 
@@ -294,10 +294,10 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 	startBlock := lastProcessedBlock + 1
 
 	// sanitize startBlock from which we will start polling for blocks
-	if e.config.MaxBacklogSize > 0 &&
-		latestBlock.Number > e.config.MaxBacklogSize &&
-		latestBlock.Number-e.config.MaxBacklogSize > lastProcessedBlock {
-		startBlock = latestBlock.Number - e.config.MaxBacklogSize
+	if e.config.NumOfBlocksToReconcile > 0 &&
+		latestBlock.Number > e.config.NumOfBlocksToReconcile &&
+		latestBlock.Number-e.config.NumOfBlocksToReconcile > lastProcessedBlock {
+		startBlock = latestBlock.Number - e.config.NumOfBlocksToReconcile
 	}
 
 	// get blocks in batches
@@ -325,7 +325,7 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 			}
 
 			if err := e.blockContainer.AddBlock(block); err != nil {
-				return nil
+				return err
 			}
 		}
 

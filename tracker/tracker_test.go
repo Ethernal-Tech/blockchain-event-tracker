@@ -588,12 +588,12 @@ func createTestTrackerConfig(t *testing.T,
 	t.Helper()
 
 	return &EventTrackerConfig{
-		RPCEndpoint:           "http://some-rpc-url.com",
-		NumBlockConfirmations: numBlockConfirmations,
-		SyncBatchSize:         batchSize,
-		MaxBacklogSize:        maxBacklogSize,
-		PollInterval:          2 * time.Second,
-		Logger:                hclog.NewNullLogger(),
+		RPCEndpoint:            "http://some-rpc-url.com",
+		NumBlockConfirmations:  numBlockConfirmations,
+		SyncBatchSize:          batchSize,
+		NumOfBlocksToReconcile: maxBacklogSize,
+		PollInterval:           2 * time.Second,
+		Logger:                 hclog.NewNullLogger(),
 		LogFilter: map[ethgo.Address][]ethgo.Hash{
 			ethgo.ZeroAddress: {store.StateSyncEventABI.ID()},
 		},
