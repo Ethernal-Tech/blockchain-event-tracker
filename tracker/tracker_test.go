@@ -584,14 +584,14 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 }
 
 func createTestTrackerConfig(t *testing.T,
-	numBlockConfirmations, batchSize, maxBacklogSize uint64) *EventTrackerConfig {
+	numBlockConfirmations, batchSize, numOfBlocksToReconcile uint64) *EventTrackerConfig {
 	t.Helper()
 
 	return &EventTrackerConfig{
 		RPCEndpoint:            "http://some-rpc-url.com",
 		NumBlockConfirmations:  numBlockConfirmations,
 		SyncBatchSize:          batchSize,
-		NumOfBlocksToReconcile: maxBacklogSize,
+		NumOfBlocksToReconcile: numOfBlocksToReconcile,
 		PollInterval:           2 * time.Second,
 		Logger:                 hclog.NewNullLogger(),
 		LogFilter: map[ethgo.Address][]ethgo.Hash{

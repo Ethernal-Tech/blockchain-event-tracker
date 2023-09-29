@@ -54,7 +54,7 @@ Event Tracker can be used to monitor, track, and analyze events emitted by smart
      "pollTime": "2s",
      "syncBatchSize": 10,
      "numBlockConfirmations": 5,
-     "maxBacklogSize": 10000,
+     "numOfBlocksToReconcile": 10000,
      "logFilter": [
        {
          "0xContractAddress": ["EventSig1", "EventSig2"]
@@ -78,7 +78,7 @@ Event Tracker can be used to monitor, track, and analyze events emitted by smart
 Our recommendations are:
 - `NumBlockConfirmations` - set this to the number of blocks you feel are enough to consider a block final on the tracked chain (where he will not be replaced in a reorg).
 - `SyncBatchSize` - should be connected to the configured NumBlockConfirmations. For example, if the NumBlockConfirmations is 10, batch size should be around 25, meaning that while syncing one batch, you will have at least half of confirmed numbers in it, and tracker can process events from them as he syncs up with the tracked chain.
-- `MaxBacklogSize` - should be configured in regards to the business logic for which you are using the tracker. If it is important to sync up and catch events from all confirmed missed blocks in the chain, then just leave this as 0, and tracker will sync up with every block you missed in the chain to get the desired events. If your node or application was down for a longer of period of time (days, months), and if it is not important to sync up all the events from missed blocks, configure MaxBacklogSize to be the number of latest blocks that you consider relevant for you to sync up until the latest chain block.
+- `NumOfBlocksToReconcile` - should be configured in regards to the business logic for which you are using the tracker. If it is important to sync up and catch events from all confirmed missed blocks in the chain, then just leave this as 0, and tracker will sync up with every block you missed in the chain to get the desired events. If your node or application was down for a longer of period of time (days, months), and if it is not important to sync up all the events from missed blocks, configure `NumOfBlocksToReconcile` to be the number of latest blocks that you consider relevant for you to sync up until the latest chain block.
 - `PollInterval` - should be configured to about the same as the block minting time on the tracked chain.
 - `Logger` - you can pass your own logger here, as long as it implements the `Logger` interface from `go-hclog`.
 - `Store` - you can pass your own store (as long as it implements the `EventTrackerStore` interface), or use the provided `BoltDBEventTrackerStore` from this repo, that creates and uses a `BoltDB` instance to store tracked blocks and events data.

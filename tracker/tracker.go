@@ -51,7 +51,7 @@ type EventTrackerConfig struct {
 	// logic with them, continuing consensus and relayer stuff.
 	// In order to not waste too much unnecessary time in syncing all those blocks, with NumOfBlocksToReconcile,
 	// we tell the tracker to sync only latestBlock.Number - NumOfBlocksToReconcile number of blocks.
-	NumOfBlocksToReconcile uint64 `json:"maxBacklogSize"`
+	NumOfBlocksToReconcile uint64 `json:"numOfBlocksToReconcile"`
 
 	// PollInterval defines a time interval in which tracker polls json rpc node
 	// for latest block on the tracked chain.
@@ -93,7 +93,7 @@ type EventTracker struct {
 //		StartBlockFromConfig:  100_000,
 //		NumBlockConfirmations: 10,
 //		SyncBatchSize:         20,
-//		MaxBacklogSize:        10_000,
+//		NumOfBlocksToReconcile:10_000,
 //		PollInterval:          2 * time.Second,
 //		Logger:                logger,
 //		Store:                 store,
@@ -127,7 +127,7 @@ func NewEventTracker(config *EventTrackerConfig) (*EventTracker, error) {
 
 		if latestBlock.Number > config.NumOfBlocksToReconcile {
 			// if this is a fresh start, then we should start syncing from
-			// latestBlock.Number - MaxBacklogSize
+			// latestBlock.Number - NumOfBlocksToReconcile
 			definiteLastProcessedBlock = latestBlock.Number - config.NumOfBlocksToReconcile
 		}
 	}
@@ -163,7 +163,7 @@ func (e *EventTracker) Close() {
 // Start is a method in the EventTracker struct that starts the tracking of blocks
 // and retrieval of logs from given blocks from the tracked chain.
 // If the tracker was turned off (node was down) for some time, it will sync up all the missed
-// blocks and logs from the last start (in regards to MaxBacklogSize field in config).
+// blocks and logs from the last start (in regards to NumOfBlocksToReconcile field in config).
 //
 // Returns:
 //   - nil if start passes successfully.
@@ -174,7 +174,7 @@ func (e *EventTracker) Start() error {
 		"numBlockConfirmations", e.config.NumBlockConfirmations,
 		"pollInterval", e.config.PollInterval,
 		"syncBatchSize", e.config.SyncBatchSize,
-		"maxBacklogSize", e.config.NumOfBlocksToReconcile,
+		"numOfBlocksToReconcile", e.config.NumOfBlocksToReconcile,
 		"logFilter", e.config.LogFilter,
 	)
 

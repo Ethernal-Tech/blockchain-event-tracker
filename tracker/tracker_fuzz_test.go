@@ -11,39 +11,39 @@ import (
 )
 
 type getNewStateF struct {
-	Address               ethgo.Address
-	Number                uint64
-	LastProcessed         uint64
-	BatchSize             uint64
-	NumBlockConfirmations uint64
-	MaxBackLogSize        uint64
+	Address                ethgo.Address
+	Number                 uint64
+	LastProcessed          uint64
+	BatchSize              uint64
+	NumBlockConfirmations  uint64
+	NumOfBlocksToReconcile uint64
 }
 
 func FuzzGetNewState(f *testing.F) {
 	seeds := []getNewStateF{
 		{
-			Address:               ethgo.BytesToAddress([]byte{1}),
-			Number:                25,
-			LastProcessed:         9,
-			BatchSize:             5,
-			NumBlockConfirmations: 3,
-			MaxBackLogSize:        1000,
+			Address:                ethgo.BytesToAddress([]byte{1}),
+			Number:                 25,
+			LastProcessed:          9,
+			BatchSize:              5,
+			NumBlockConfirmations:  3,
+			NumOfBlocksToReconcile: 1000,
 		},
 		{
-			Address:               ethgo.BytesToAddress([]byte{1}),
-			Number:                30,
-			LastProcessed:         29,
-			BatchSize:             5,
-			NumBlockConfirmations: 3,
-			MaxBackLogSize:        1000,
+			Address:                ethgo.BytesToAddress([]byte{1}),
+			Number:                 30,
+			LastProcessed:          29,
+			BatchSize:              5,
+			NumBlockConfirmations:  3,
+			NumOfBlocksToReconcile: 1000,
 		},
 		{
-			Address:               ethgo.BytesToAddress([]byte{2}),
-			Number:                100,
-			LastProcessed:         10,
-			BatchSize:             10,
-			NumBlockConfirmations: 3,
-			MaxBackLogSize:        15,
+			Address:                ethgo.BytesToAddress([]byte{2}),
+			Number:                 100,
+			LastProcessed:          10,
+			BatchSize:              10,
+			NumBlockConfirmations:  3,
+			NumOfBlocksToReconcile: 15,
 		},
 	}
 
@@ -75,7 +75,7 @@ func FuzzGetNewState(f *testing.F) {
 		}
 		providerMock.On("GetLogs", mock.Anything).Return(logs, nil)
 
-		testConfig := createTestTrackerConfig(t, data.NumBlockConfirmations, data.BatchSize, data.MaxBackLogSize)
+		testConfig := createTestTrackerConfig(t, data.NumBlockConfirmations, data.BatchSize, data.NumOfBlocksToReconcile)
 		testConfig.BlockProvider = providerMock
 
 		eventTracker := &EventTracker{
