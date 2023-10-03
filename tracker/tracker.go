@@ -117,8 +117,6 @@ func NewEventTracker(config *EventTrackerConfig) (*EventTracker, error) {
 		return nil, err
 	}
 
-	definiteLastProcessedBlock := lastProcessedBlock
-
 	if lastProcessedBlock == 0 && config.NumOfBlocksToReconcile > 0 {
 		latestBlock, err := config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
 		if err != nil {
@@ -128,7 +126,11 @@ func NewEventTracker(config *EventTrackerConfig) (*EventTracker, error) {
 		if latestBlock.Number > config.NumOfBlocksToReconcile {
 			// if this is a fresh start, then we should start syncing from
 			// latestBlock.Number - NumOfBlocksToReconcile
-			definiteLastProcessedBlock = latestBlock.Number - config.NumOfBlocksToReconcile
+			lastProcessedBlock = latestBlock.Number - config.NumOfBlocksToReconcile
+
+			if err := config.Store.InsertLastProcessedBlock(lastProcessedBlock); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -136,7 +138,7 @@ func NewEventTracker(config *EventTrackerConfig) (*EventTracker, error) {
 		config:         config,
 		closeCh:        make(chan struct{}),
 		blockTracker:   blocktracker.NewJSONBlockTracker(config.BlockProvider),
-		blockContainer: NewTrackerBlockContainer(definiteLastProcessedBlock),
+		blockContainer: NewTrackerBlockContainer(lastProcessedBlock),
 	}, nil
 }
 
