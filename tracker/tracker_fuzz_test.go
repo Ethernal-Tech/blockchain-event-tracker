@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/goran-ethernal/eventtracker/store"
+	"github.com/Ethernal-Tech/blockchain-event-tracker/store"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/umbracle/ethgo"

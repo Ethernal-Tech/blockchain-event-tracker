@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goran-ethernal/eventtracker/common"
-	"github.com/goran-ethernal/eventtracker/store"
+	"github.com/Ethernal-Tech/blockchain-event-tracker/common"
+	"github.com/Ethernal-Tech/blockchain-event-tracker/store"
 	hcf "github.com/hashicorp/go-hclog"
 	"github.com/umbracle/ethgo"
 	"github.com/umbracle/ethgo/blocktracker"
