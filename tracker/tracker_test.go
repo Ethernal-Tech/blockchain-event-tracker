@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/goran-ethernal/eventtracker/store"
+	"github.com/Ethernal-Tech/blockchain-event-tracker/store"
 	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
