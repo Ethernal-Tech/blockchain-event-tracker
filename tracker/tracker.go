@@ -11,6 +11,7 @@ import (
 	hcf "github.com/hashicorp/go-hclog"
 	"github.com/umbracle/ethgo"
 	"github.com/umbracle/ethgo/blocktracker"
+	"github.com/umbracle/ethgo/jsonrpc"
 )
 
 // EventSubscriber is an interface that defines methods for handling tracked logs (events) from a blockchain
@@ -63,9 +64,6 @@ type EventTrackerConfig struct {
 	// Logger is the logger instance for event tracker
 	Logger hcf.Logger `json:"-"`
 
-	// Store is the store implementation for data that tracker saves (lastProcessedBlock and logs)
-	Store store.EventTrackerStore `json:"-"`
-
 	// BlockProvider is the implementation of a provider that returns blocks and logs from tracked chain
 	BlockProvider BlockProvider `json:"-"`
 
@@ -82,6 +80,8 @@ type EventTracker struct {
 
 	blockTracker   blocktracker.BlockTrackerInterface
 	blockContainer *TrackerBlockContainer
+
+	store store.EventTrackerStore
 }
 
 // NewEventTracker is a constructor function that creates a new instance of the EventTracker struct.
@@ -108,34 +108,51 @@ type EventTracker struct {
 //
 // Inputs:
 //   - config (TrackerConfig): configuration of EventTracker.
+//   - store: implementation of EventTrackerStore interface
+//   - startBlockFromGenesis: block from which to start syncing
 //
 // Outputs:
 //   - A new instance of the EventTracker struct.
-func NewEventTracker(config *EventTrackerConfig) (*EventTracker, error) {
-	lastProcessedBlock, err := config.Store.GetLastProcessedBlock()
+func NewEventTracker(config *EventTrackerConfig, store store.EventTrackerStore,
+	startBlockFromGenesis uint64) (*EventTracker, error) {
+	lastProcessedBlock, err := store.GetLastProcessedBlock()
 	if err != nil {
 		return nil, err
 	}
 
 	if lastProcessedBlock == 0 && config.NumOfBlocksToReconcile > 0 {
-		latestBlock, err := config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
-		if err != nil {
-			return nil, err
-		}
+		lastProcessedBlock = startBlockFromGenesis
 
-		if latestBlock.Number > config.NumOfBlocksToReconcile {
-			// if this is a fresh start, then we should start syncing from
-			// latestBlock.Number - NumOfBlocksToReconcile
-			lastProcessedBlock = latestBlock.Number - config.NumOfBlocksToReconcile
-
-			if err := config.Store.InsertLastProcessedBlock(lastProcessedBlock); err != nil {
+		if config.NumOfBlocksToReconcile > 0 {
+			latestBlock, err := config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
+			if err != nil {
 				return nil, err
+			}
+
+			if latestBlock.Number > config.NumOfBlocksToReconcile &&
+				startBlockFromGenesis < latestBlock.Number-config.NumOfBlocksToReconcile {
+				// if this is a fresh start, and we missed too much blocks,
+				// then we should start syncing from
+				// latestBlock.Number - NumOfBlocksToReconcile
+				lastProcessedBlock = latestBlock.Number - config.NumOfBlocksToReconcile
 			}
 		}
 	}
 
+	// if block provider is not provided externally,
+	// we can start the ethgo one
+	if config.BlockProvider == nil {
+		clt, err := jsonrpc.NewClient(config.RPCEndpoint)
+		if err != nil {
+			return nil, err
+		}
+
+		config.BlockProvider = clt.Eth()
+	}
+
 	return &EventTracker{
 		config:         config,
+		store:          store,
 		closeCh:        make(chan struct{}),
 		blockTracker:   blocktracker.NewJSONBlockTracker(config.BlockProvider),
 		blockContainer: NewTrackerBlockContainer(lastProcessedBlock),
@@ -414,7 +431,7 @@ func (e *EventTracker) processLogs() error {
 		}
 	}
 
-	if err := e.config.Store.InsertLastProcessedBlock(toBlock); err != nil {
+	if err := e.store.InsertLastProcessedBlock(toBlock); err != nil {
 		e.config.Logger.Error("Process logs failed on saving last processed block",
 			"fromBlock", fromBlock,
 			"toBlock", toBlock,
@@ -423,7 +440,7 @@ func (e *EventTracker) processLogs() error {
 		return err
 	}
 
-	if err := e.config.Store.InsertLogs(filteredLogs); err != nil {
+	if err := e.store.InsertLogs(filteredLogs); err != nil {
 		e.config.Logger.Error("Process logs failed on saving logs to store",
 			"fromBlock", fromBlock,
 			"toBlock", toBlock,

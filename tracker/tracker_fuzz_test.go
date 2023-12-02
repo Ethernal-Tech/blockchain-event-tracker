@@ -81,6 +81,7 @@ func FuzzGetNewState(f *testing.F) {
 		eventTracker := &EventTracker{
 			config:         testConfig,
 			blockContainer: NewTrackerBlockContainer(data.LastProcessed),
+			store:          store.NewTestTrackerStore(t),
 		}
 
 		require.NoError(t, eventTracker.getNewState(&ethgo.Block{Number: data.Number}))
