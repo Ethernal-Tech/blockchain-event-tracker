@@ -115,6 +115,17 @@ type EventTracker struct {
 //   - A new instance of the EventTracker struct.
 func NewEventTracker(config *EventTrackerConfig, store store.EventTrackerStore,
 	startBlockFromGenesis uint64) (*EventTracker, error) {
+	// if block provider is not provided externally,
+	// we can start the ethgo one
+	if config.BlockProvider == nil {
+		clt, err := jsonrpc.NewClient(config.RPCEndpoint)
+		if err != nil {
+			return nil, err
+		}
+
+		config.BlockProvider = clt.Eth()
+	}
+
 	lastProcessedBlock, err := store.GetLastProcessedBlock()
 	if err != nil {
 		return nil, err
@@ -137,17 +148,6 @@ func NewEventTracker(config *EventTrackerConfig, store store.EventTrackerStore,
 				lastProcessedBlock = latestBlock.Number - config.NumOfBlocksToReconcile
 			}
 		}
-	}
-
-	// if block provider is not provided externally,
-	// we can start the ethgo one
-	if config.BlockProvider == nil {
-		clt, err := jsonrpc.NewClient(config.RPCEndpoint)
-		if err != nil {
-			return nil, err
-		}
-
-		config.BlockProvider = clt.Eth()
 	}
 
 	return &EventTracker{
