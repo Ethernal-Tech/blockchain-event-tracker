@@ -8,10 +8,10 @@ import (
 
 	"github.com/Ethernal-Tech/blockchain-event-tracker/common"
 	"github.com/Ethernal-Tech/blockchain-event-tracker/store"
+	"github.com/Ethernal-Tech/ethgo"
+	"github.com/Ethernal-Tech/ethgo/blocktracker"
+	"github.com/Ethernal-Tech/ethgo/jsonrpc"
 	hcf "github.com/hashicorp/go-hclog"
-	"github.com/umbracle/ethgo"
-	"github.com/umbracle/ethgo/blocktracker"
-	"github.com/umbracle/ethgo/jsonrpc"
 )
 
 // EventSubscriber is an interface that defines methods for handling tracked logs (events) from a blockchain

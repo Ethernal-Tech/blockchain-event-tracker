@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/Ethernal-Tech/blockchain-event-tracker/store"
+	"github.com/Ethernal-Tech/ethgo"
 	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"github.com/umbracle/ethgo"
 )
 
 var _ EventSubscriber = (*mockEventSubscriber)(nil)
