@@ -132,6 +132,7 @@ func (p *BoltDBEventTrackerStore) InsertLastProcessedBlock(lastProcessedBlockNum
 func (p *BoltDBEventTrackerStore) InsertLogs(logs []*ethgo.Log) error {
 	return p.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(petLogsBucket)
+
 		for _, log := range logs {
 			raw, err := json.Marshal(log)
 			if err != nil {

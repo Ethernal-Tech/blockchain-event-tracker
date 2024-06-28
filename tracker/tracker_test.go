@@ -384,6 +384,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		// check that in memory cache removed processed confirmed logs
 		require.Len(t, tracker.blockContainer.blocks, int(numOfMissedBlocks+1-expectedLastProcessed))
 		require.Len(t, tracker.blockContainer.numToHashMap, int(numOfMissedBlocks+1-expectedLastProcessed))
+
 		for i := expectedLastProcessed + 1; i <= numOfMissedBlocks+1; i++ {
 			_, exists := tracker.blockContainer.numToHashMap[i]
 			require.True(t, exists)
@@ -485,6 +486,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		expectedNumOfNonProcessedBlocks := int(numOfMissedBlocks + numOfCachedBlocks + 1 - expectedLastProcessed)
 		require.Len(t, tracker.blockContainer.blocks, expectedNumOfNonProcessedBlocks)
 		require.Len(t, tracker.blockContainer.numToHashMap, expectedNumOfNonProcessedBlocks)
+
 		for i := expectedLastProcessed + 1; i <= numOfMissedBlocks+1; i++ {
 			_, exists := tracker.blockContainer.numToHashMap[i]
 			require.True(t, exists)
@@ -579,6 +581,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		expectedNumOfNonProcessedBlocks := int(numOfCachedBlocks + 1 - expectedLastProcessed)
 		require.Len(t, tracker.blockContainer.blocks, expectedNumOfNonProcessedBlocks)
 		require.Len(t, tracker.blockContainer.numToHashMap, expectedNumOfNonProcessedBlocks)
+
 		for i := expectedLastProcessed + 1; i <= numOfCachedBlocks+1; i++ {
 			_, exists := tracker.blockContainer.numToHashMap[i]
 			require.True(t, exists)

@@ -268,6 +268,7 @@ func (e *EventTracker) syncOnStart() (err error) {
 
 	e.once.Do(func() {
 		e.config.Logger.Info("Syncing up on start...")
+
 		latestBlock, err = e.config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
 		if err != nil {
 			return

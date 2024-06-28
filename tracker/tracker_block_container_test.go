@@ -3,8 +3,8 @@ package tracker
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"github.com/Ethernal-Tech/ethgo"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTrackerBlockContainer_GetConfirmedBlocks(t *testing.T) {
