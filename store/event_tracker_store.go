@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/Ethernal-Tech/blockchain-event-tracker/common"
-	"github.com/umbracle/ethgo"
+	"github.com/Ethernal-Tech/ethgo"
 	bolt "go.etcd.io/bbolt"
 )
 

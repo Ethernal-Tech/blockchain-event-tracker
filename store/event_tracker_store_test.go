@@ -3,8 +3,8 @@ package store
 import (
 	"testing"
 
+	"github.com/Ethernal-Tech/ethgo"
 	"github.com/stretchr/testify/require"
-	"github.com/umbracle/ethgo"
 )
 
 func TestEventTrackerStore_InsertAndGetLastProcessedBlock(t *testing.T) {

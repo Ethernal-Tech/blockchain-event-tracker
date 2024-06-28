@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/umbracle/ethgo"
+	"github.com/Ethernal-Tech/ethgo"
 )
 
 // TrackerBlockContainer is a struct used to cache and manage tracked blocks from tracked chain.
