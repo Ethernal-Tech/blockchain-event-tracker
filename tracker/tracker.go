@@ -125,6 +125,7 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 
 	if store == nil {
 		var err error
+
 		store, err = eventStore.NewBoltDBEventTrackerStore("./default.db")
 		if err != nil {
 			return nil, err
@@ -437,6 +438,7 @@ func (e *EventTracker) processLogs() error {
 				if e.config.EventSubscriber == nil {
 					e.config.Logger.Error("An error occurred while passing event log to subscriber",
 						"err", "subscriber not set")
+
 					break
 				}
 
