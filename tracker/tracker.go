@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/Ethernal-Tech/blockchain-event-tracker/common"
-	"github.com/Ethernal-Tech/blockchain-event-tracker/store"
+	eventStore "github.com/Ethernal-Tech/blockchain-event-tracker/store"
 	"github.com/Ethernal-Tech/ethgo"
 	"github.com/Ethernal-Tech/ethgo/blocktracker"
 	"github.com/Ethernal-Tech/ethgo/jsonrpc"
@@ -81,7 +81,7 @@ type EventTracker struct {
 	blockTracker   blocktracker.BlockTrackerInterface
 	blockContainer *TrackerBlockContainer
 
-	store store.EventTrackerStore
+	store eventStore.EventTrackerStore
 }
 
 // NewEventTracker is a constructor function that creates a new instance of the EventTracker struct.
@@ -113,8 +113,24 @@ type EventTracker struct {
 //
 // Outputs:
 //   - A new instance of the EventTracker struct.
-func NewEventTracker(config *EventTrackerConfig, store store.EventTrackerStore,
+func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerStore,
 	startBlockFromGenesis uint64) (*EventTracker, error) {
+	if config == nil {
+		return nil, fmt.Errorf("invalid configuration. Failed to init Event Tracker")
+	}
+
+	if config.Logger == nil {
+		return nil, fmt.Errorf("invalid configuration, missing logger. Failed to init Event Tracker")
+	}
+
+	if store == nil {
+		var err error
+		store, err = eventStore.NewBoltDBEventTrackerStore("./default.db")
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// if block provider is not provided externally,
 	// we can start the ethgo one
 	if config.BlockProvider == nil {
@@ -134,19 +150,17 @@ func NewEventTracker(config *EventTrackerConfig, store store.EventTrackerStore,
 	if lastProcessedBlock == 0 && config.NumOfBlocksToReconcile > 0 {
 		lastProcessedBlock = startBlockFromGenesis
 
-		if config.NumOfBlocksToReconcile > 0 {
-			latestBlock, err := config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
-			if err != nil {
-				return nil, err
-			}
+		latestBlock, err := config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
+		if err != nil {
+			return nil, err
+		}
 
-			if latestBlock.Number > config.NumOfBlocksToReconcile &&
-				startBlockFromGenesis < latestBlock.Number-config.NumOfBlocksToReconcile {
-				// if this is a fresh start, and we missed too much blocks,
-				// then we should start syncing from
-				// latestBlock.Number - NumOfBlocksToReconcile
-				lastProcessedBlock = latestBlock.Number - config.NumOfBlocksToReconcile
-			}
+		if latestBlock.Number > config.NumOfBlocksToReconcile &&
+			startBlockFromGenesis < latestBlock.Number-config.NumOfBlocksToReconcile {
+			// if this is a fresh start, and we missed too much blocks,
+			// then we should start syncing from
+			// latestBlock.Number - NumOfBlocksToReconcile
+			lastProcessedBlock = latestBlock.Number - config.NumOfBlocksToReconcile
 		}
 	}
 
@@ -419,6 +433,12 @@ func (e *EventTracker) processLogs() error {
 		for _, id := range logIDs {
 			if log.Topics[0] == id {
 				filteredLogs = append(filteredLogs, log)
+
+				if e.config.EventSubscriber == nil {
+					e.config.Logger.Error("An error occurred while passing event log to subscriber",
+						"err", "subscriber not set")
+					break
+				}
 
 				if err := e.config.EventSubscriber.AddLog(log); err != nil {
 					// we will only log this, since the store will have these logs

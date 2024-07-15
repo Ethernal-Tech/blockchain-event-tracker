@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -120,6 +121,102 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		require.Equal(t, tracker.config.NumBlockConfirmations, tracker.blockContainer.LastCachedBlock())
 	})
 
+	t.Run("Add block by block - no confirmed blocks - invalid subscriber", func(t *testing.T) {
+		t.Parallel()
+
+		tracker, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, 10, 10, 0), store.NewTestTrackerStore(t), 0)
+
+		require.NoError(t, err)
+
+		// add some blocks, but don't go to confirmation level
+		for i := uint64(1); i <= tracker.config.NumBlockConfirmations; i++ {
+			require.NoError(t, tracker.trackBlock(
+				&ethgo.Block{
+					Number:     i,
+					Hash:       ethgo.Hash{byte(i)},
+					ParentHash: ethgo.Hash{byte(i - 1)},
+				}))
+		}
+
+		// check that we have correct number of cached blocks
+		require.Len(t, tracker.blockContainer.blocks, int(tracker.config.NumBlockConfirmations))
+		require.Len(t, tracker.blockContainer.numToHashMap, int(tracker.config.NumBlockConfirmations))
+
+		// check that we have no confirmed blocks
+		require.Nil(t, tracker.blockContainer.GetConfirmedBlocks(tracker.config.NumBlockConfirmations))
+
+		// check that the last processed block is 0, since we did not have any confirmed blocks
+		require.Equal(t, uint64(0), tracker.blockContainer.LastProcessedBlockLocked())
+		lastProcessedBlockInStore, err := tracker.store.GetLastProcessedBlock()
+		require.NoError(t, err)
+		require.Equal(t, uint64(0), lastProcessedBlockInStore)
+
+		// check that the last cached block is as expected
+		require.Equal(t, tracker.config.NumBlockConfirmations, tracker.blockContainer.LastCachedBlock())
+	})
+
+	t.Run("Add block by block - have confirmed blocks - no logs in them - invalid subscriber", func(t *testing.T) {
+		t.Parallel()
+
+		numBlockConfirmations := uint64(3)
+		totalNumOfPreCachedBlocks := numBlockConfirmations + 1
+		numOfConfirmedBlocks := totalNumOfPreCachedBlocks - numBlockConfirmations + 1
+
+		// mock logs return so that no confirmed block has any logs we need
+		blockProviderMock := new(mockProvider)
+		blockProviderMock.On("GetLogs", mock.Anything).Return([]*ethgo.Log{}, nil).Once()
+
+		tracker, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
+			store.NewTestTrackerStore(t), 0)
+		require.NoError(t, err)
+
+		tracker.config.BlockProvider = blockProviderMock
+
+		// add some blocks
+		var block *ethgo.Block
+		for i := uint64(1); i <= totalNumOfPreCachedBlocks; i++ {
+			block = &ethgo.Block{
+				Number:     i,
+				Hash:       ethgo.Hash{byte(i)},
+				ParentHash: ethgo.Hash{byte(i - 1)},
+			}
+			require.NoError(t, tracker.blockContainer.AddBlock(block))
+		}
+
+		// check that we have correct number of cached blocks
+		require.Len(t, tracker.blockContainer.blocks, int(totalNumOfPreCachedBlocks))
+		require.Len(t, tracker.blockContainer.numToHashMap, int(totalNumOfPreCachedBlocks))
+
+		// track new block
+		latestBlock := &ethgo.Block{
+			Number:     block.Number + 1,
+			Hash:       ethgo.Hash{byte(block.Number + 1)},
+			ParentHash: block.Hash,
+		}
+		require.NoError(t, tracker.trackBlock(latestBlock))
+
+		// check if the last cached block is as expected
+		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
+		// check if the last confirmed block processed is as expected
+		require.Equal(t, numOfConfirmedBlocks, tracker.blockContainer.LastProcessedBlock())
+		// check if the last confirmed block is saved in db as well
+		lastProcessedConfirmedBlock, err := tracker.store.GetLastProcessedBlock()
+		require.NoError(t, err)
+		require.Equal(t, numOfConfirmedBlocks, lastProcessedConfirmedBlock)
+		// check that in memory cache removed processed confirmed logs
+		expectedNumOfBlocksInCache := totalNumOfPreCachedBlocks + 1 - numOfConfirmedBlocks
+		require.Len(t, tracker.blockContainer.blocks, int(expectedNumOfBlocksInCache))
+		require.Len(t, tracker.blockContainer.numToHashMap, int(expectedNumOfBlocksInCache))
+
+		for i := uint64(1); i <= numOfConfirmedBlocks; i++ {
+			_, exists := tracker.blockContainer.numToHashMap[i]
+			require.False(t, exists)
+			require.Equal(t, -1, tracker.blockContainer.indexOf(i))
+		}
+
+		blockProviderMock.AssertExpectations(t)
+	})
+
 	t.Run("Add block by block - have confirmed blocks - no logs in them", func(t *testing.T) {
 		t.Parallel()
 
@@ -199,6 +296,81 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.On("GetLogs", mock.Anything).Return(logs, nil).Once()
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, 10, 0),
+			store.NewTestTrackerStore(t), 0)
+		require.NoError(t, err)
+
+		tracker.config.BlockProvider = blockProviderMock
+
+		// add some blocks
+		var block *ethgo.Block
+		for i := uint64(1); i <= totalNumOfPreCachedBlocks; i++ {
+			block = &ethgo.Block{
+				Number:     i,
+				Hash:       ethgo.Hash{byte(i)},
+				ParentHash: ethgo.Hash{byte(i - 1)},
+			}
+			require.NoError(t, tracker.blockContainer.AddBlock(block))
+		}
+
+		// check that we have correct number of cached blocks
+		require.Len(t, tracker.blockContainer.blocks, int(totalNumOfPreCachedBlocks))
+		require.Len(t, tracker.blockContainer.numToHashMap, int(totalNumOfPreCachedBlocks))
+
+		// track new block
+		latestBlock := &ethgo.Block{
+			Number:     block.Number + 1,
+			Hash:       ethgo.Hash{byte(block.Number + 1)},
+			ParentHash: block.Hash,
+		}
+		require.NoError(t, tracker.trackBlock(latestBlock))
+
+		// check if the last cached block is as expected
+		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
+		// check if the last confirmed block processed is as expected
+		require.Equal(t, numOfConfirmedBlocks, tracker.blockContainer.LastProcessedBlock())
+		// check if the last confirmed block is saved in db as well
+		lastProcessedConfirmedBlock, err := tracker.store.GetLastProcessedBlock()
+		require.NoError(t, err)
+		require.Equal(t, numOfConfirmedBlocks, lastProcessedConfirmedBlock)
+		// check if we have logs in store
+		for _, log := range logs {
+			logFromDB, err := tracker.store.GetLog(log.BlockNumber, log.LogIndex)
+			require.NoError(t, err)
+			require.Equal(t, log.Address, logFromDB.Address)
+			require.Equal(t, log.BlockNumber, log.BlockNumber)
+			require.Equal(t, log.LogIndex, logFromDB.LogIndex)
+		}
+		// check that in memory cache removed processed confirmed logs
+		expectedNumOfBlocksInCache := totalNumOfPreCachedBlocks + 1 - numOfConfirmedBlocks
+		require.Len(t, tracker.blockContainer.blocks, int(expectedNumOfBlocksInCache))
+		require.Len(t, tracker.blockContainer.numToHashMap, int(expectedNumOfBlocksInCache))
+
+		for i := uint64(1); i <= numOfConfirmedBlocks; i++ {
+			_, exists := tracker.blockContainer.numToHashMap[i]
+			require.False(t, exists)
+			require.Equal(t, -1, tracker.blockContainer.indexOf(i))
+		}
+
+		blockProviderMock.AssertExpectations(t)
+	})
+
+	t.Run("Add block by block - have confirmed blocks with logs - invalid subscriber", func(t *testing.T) {
+		t.Parallel()
+
+		numBlockConfirmations := uint64(3)
+		totalNumOfPreCachedBlocks := numBlockConfirmations + 1
+		numOfConfirmedBlocks := totalNumOfPreCachedBlocks - numBlockConfirmations + 1
+
+		// mock logs return so that no confirmed block has any logs we need
+		logs := []*ethgo.Log{
+			store.CreateTestLogForStateSyncEvent(t, 1, 1),
+			store.CreateTestLogForStateSyncEvent(t, 1, 11),
+			store.CreateTestLogForStateSyncEvent(t, 2, 3),
+		}
+		blockProviderMock := new(mockProvider)
+		blockProviderMock.On("GetLogs", mock.Anything).Return(logs, nil).Once()
+
+		tracker, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
 			store.NewTestTrackerStore(t), 0)
 		require.NoError(t, err)
 
@@ -590,6 +762,43 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 
 		blockProviderMock.AssertExpectations(t)
 	})
+
+	t.Run("Create a tracker - invalid/default store", func(t *testing.T) {
+		t.Parallel()
+
+		batchSize := uint64(4)
+		numBlockConfirmations := uint64(3)
+
+		_, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0), nil, 0)
+		require.NoError(t, err)
+
+		// Remove default.db file created during test
+		if _, err = os.Stat("./default.db"); err == nil {
+			os.RemoveAll("./default.db")
+		}
+	})
+
+	t.Run("Create a tracker with invalid config", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewEventTracker(nil, nil, 0)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "invalid configuration")
+	})
+
+	t.Run("Create a tracker with invalid config, missing logger", func(t *testing.T) {
+		t.Parallel()
+
+		batchSize := uint64(4)
+		numBlockConfirmations := uint64(3)
+
+		config := createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0)
+		config.Logger = nil
+
+		_, err := NewEventTracker(config, store.NewTestTrackerStore(t), 0)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "missing logger")
+	})
 }
 
 func createTestTrackerConfig(t *testing.T,
@@ -607,6 +816,25 @@ func createTestTrackerConfig(t *testing.T,
 			ethgo.ZeroAddress: {store.StateSyncEventABI.ID()},
 		},
 		EventSubscriber: new(mockEventSubscriber),
+		BlockProvider:   new(mockProvider),
+	}
+}
+
+func createTestTrackerConfigInvalidSub(t *testing.T,
+	numBlockConfirmations, batchSize, numOfBlocksToReconcile uint64) *EventTrackerConfig {
+	t.Helper()
+
+	return &EventTrackerConfig{
+		RPCEndpoint:            "http://some-rpc-url.com",
+		NumBlockConfirmations:  numBlockConfirmations,
+		SyncBatchSize:          batchSize,
+		NumOfBlocksToReconcile: numOfBlocksToReconcile,
+		PollInterval:           2 * time.Second,
+		Logger:                 hclog.NewNullLogger(),
+		LogFilter: map[ethgo.Address][]ethgo.Hash{
+			ethgo.ZeroAddress: {store.StateSyncEventABI.ID()},
+		},
+		EventSubscriber: nil,
 		BlockProvider:   new(mockProvider),
 	}
 }
