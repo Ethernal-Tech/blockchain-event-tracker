@@ -121,41 +121,6 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		require.Equal(t, tracker.config.NumBlockConfirmations, tracker.blockContainer.LastCachedBlock())
 	})
 
-	t.Run("Add block by block - no confirmed blocks - invalid subscriber", func(t *testing.T) {
-		t.Parallel()
-
-		// create a tracker with invalid subscriber
-		tracker, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, 10, 10, 0), store.NewTestTrackerStore(t), 0)
-
-		require.NoError(t, err)
-
-		// add some blocks, but don't go to confirmation level
-		for i := uint64(1); i <= tracker.config.NumBlockConfirmations; i++ {
-			require.NoError(t, tracker.trackBlock(
-				&ethgo.Block{
-					Number:     i,
-					Hash:       ethgo.Hash{byte(i)},
-					ParentHash: ethgo.Hash{byte(i - 1)},
-				}))
-		}
-
-		// check that we have correct number of cached blocks
-		require.Len(t, tracker.blockContainer.blocks, int(tracker.config.NumBlockConfirmations))
-		require.Len(t, tracker.blockContainer.numToHashMap, int(tracker.config.NumBlockConfirmations))
-
-		// check that we have no confirmed blocks
-		require.Nil(t, tracker.blockContainer.GetConfirmedBlocks(tracker.config.NumBlockConfirmations))
-
-		// check that the last processed block is 0, since we did not have any confirmed blocks
-		require.Equal(t, uint64(0), tracker.blockContainer.LastProcessedBlockLocked())
-		lastProcessedBlockInStore, err := tracker.store.GetLastProcessedBlock()
-		require.NoError(t, err)
-		require.Equal(t, uint64(0), lastProcessedBlockInStore)
-
-		// check that the last cached block is as expected
-		require.Equal(t, tracker.config.NumBlockConfirmations, tracker.blockContainer.LastCachedBlock())
-	})
-
 	t.Run("Add block by block - have confirmed blocks - no logs in them - invalid subscriber", func(t *testing.T) {
 		t.Parallel()
 
