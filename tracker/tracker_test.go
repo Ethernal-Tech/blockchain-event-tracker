@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -118,6 +119,22 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 
 		// check that the last cached block is as expected
 		require.Equal(t, tracker.config.NumBlockConfirmations, tracker.blockContainer.LastCachedBlock())
+	})
+
+	t.Run("Add block by block - have confirmed blocks - no logs in them - invalid subscriber", func(t *testing.T) {
+		t.Parallel()
+
+		numBlockConfirmations := uint64(3)
+
+		// mock logs return so that no confirmed block has any logs we need
+		blockProviderMock := new(mockProvider)
+		blockProviderMock.On("GetLogs", mock.Anything).Return([]*ethgo.Log{}, nil).Once()
+
+		// create a tracker with invalid subscriber
+		_, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
+			store.NewTestTrackerStore(t), 0)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "invalid configuration, event subscriber not set")
 	})
 
 	t.Run("Add block by block - have confirmed blocks - no logs in them", func(t *testing.T) {
@@ -255,6 +272,27 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		}
 
 		blockProviderMock.AssertExpectations(t)
+	})
+
+	t.Run("Add block by block - have confirmed blocks with logs - invalid subscriber", func(t *testing.T) {
+		t.Parallel()
+
+		numBlockConfirmations := uint64(3)
+
+		// mock logs return so that no confirmed block has any logs we need
+		logs := []*ethgo.Log{
+			store.CreateTestLogForStateSyncEvent(t, 1, 1),
+			store.CreateTestLogForStateSyncEvent(t, 1, 11),
+			store.CreateTestLogForStateSyncEvent(t, 2, 3),
+		}
+		blockProviderMock := new(mockProvider)
+		blockProviderMock.On("GetLogs", mock.Anything).Return(logs, nil).Once()
+
+		// create a tracker with invalid subscriber
+		_, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
+			store.NewTestTrackerStore(t), 0)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "invalid configuration, event subscriber not set")
 	})
 
 	t.Run("Add block by block - an error occurs on getting logs", func(t *testing.T) {
@@ -590,6 +628,42 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 
 		blockProviderMock.AssertExpectations(t)
 	})
+
+	t.Run("Create a tracker - invalid/default store", func(t *testing.T) {
+		t.Parallel()
+
+		batchSize := uint64(4)
+		numBlockConfirmations := uint64(3)
+
+		_, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0), nil, 0)
+		require.NoError(t, err)
+
+		// Remove default.db file created during test
+		if _, err = os.Stat(defaultStore); err == nil {
+			os.RemoveAll(defaultStore)
+		}
+	})
+
+	t.Run("Create a tracker with invalid config", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewEventTracker(nil, nil, 0)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "invalid configuration")
+	})
+
+	t.Run("Create a tracker with invalid config, missing logger", func(t *testing.T) {
+		t.Parallel()
+
+		batchSize := uint64(4)
+		numBlockConfirmations := uint64(3)
+
+		config := createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0)
+		config.Logger = nil
+
+		_, err := NewEventTracker(config, store.NewTestTrackerStore(t), 0)
+		require.NoError(t, err)
+	})
 }
 
 func createTestTrackerConfig(t *testing.T,
@@ -607,6 +681,25 @@ func createTestTrackerConfig(t *testing.T,
 			ethgo.ZeroAddress: {store.StateSyncEventABI.ID()},
 		},
 		EventSubscriber: new(mockEventSubscriber),
+		BlockProvider:   new(mockProvider),
+	}
+}
+
+func createTestTrackerConfigInvalidSub(t *testing.T,
+	numBlockConfirmations, batchSize, numOfBlocksToReconcile uint64) *EventTrackerConfig {
+	t.Helper()
+
+	return &EventTrackerConfig{
+		RPCEndpoint:            "http://some-rpc-url.com",
+		NumBlockConfirmations:  numBlockConfirmations,
+		SyncBatchSize:          batchSize,
+		NumOfBlocksToReconcile: numOfBlocksToReconcile,
+		PollInterval:           2 * time.Second,
+		Logger:                 hclog.NewNullLogger(),
+		LogFilter: map[ethgo.Address][]ethgo.Hash{
+			ethgo.ZeroAddress: {store.StateSyncEventABI.ID()},
+		},
+		EventSubscriber: nil,
 		BlockProvider:   new(mockProvider),
 	}
 }
