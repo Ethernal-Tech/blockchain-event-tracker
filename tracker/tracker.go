@@ -71,6 +71,8 @@ type EventTrackerConfig struct {
 	EventSubscriber EventSubscriber `json:"-"`
 }
 
+var defaultStore = "./eventStore.db"
+
 // EventTracker represents a tracker for events on desired contracts on some chain
 type EventTracker struct {
 	config *EventTrackerConfig
@@ -120,13 +122,17 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 	}
 
 	if config.Logger == nil {
-		return nil, fmt.Errorf("invalid configuration, missing logger. Failed to init Event Tracker")
+		config.Logger = hcf.NewNullLogger().Named("event-tracker")
+	}
+
+	if config.EventSubscriber == nil {
+		return nil, fmt.Errorf("invalid configuration, event subscriber not set. Failed to init Event Tracker")
 	}
 
 	if store == nil {
 		var err error
 
-		store, err = eventStore.NewBoltDBEventTrackerStore("./default.db")
+		store, err = eventStore.NewBoltDBEventTrackerStore(defaultStore)
 		if err != nil {
 			return nil, err
 		}
@@ -434,13 +440,6 @@ func (e *EventTracker) processLogs() error {
 		for _, id := range logIDs {
 			if log.Topics[0] == id {
 				filteredLogs = append(filteredLogs, log)
-
-				if e.config.EventSubscriber == nil {
-					e.config.Logger.Error("An error occurred while passing event log to subscriber",
-						"err", "subscriber not set")
-
-					break
-				}
 
 				if err := e.config.EventSubscriber.AddLog(log); err != nil {
 					// we will only log this, since the store will have these logs

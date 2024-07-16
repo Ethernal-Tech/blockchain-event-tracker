@@ -125,43 +125,16 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		t.Parallel()
 
 		numBlockConfirmations := uint64(3)
-		totalNumOfPreCachedBlocks := numBlockConfirmations + 1
 
 		// mock logs return so that no confirmed block has any logs we need
 		blockProviderMock := new(mockProvider)
 		blockProviderMock.On("GetLogs", mock.Anything).Return([]*ethgo.Log{}, nil).Once()
 
 		// create a tracker with invalid subscriber
-		tracker, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
+		_, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
 			store.NewTestTrackerStore(t), 0)
-		require.NoError(t, err)
-
-		tracker.config.BlockProvider = blockProviderMock
-
-		// add some blocks
-		var block *ethgo.Block
-		for i := uint64(1); i <= totalNumOfPreCachedBlocks; i++ {
-			block = &ethgo.Block{
-				Number:     i,
-				Hash:       ethgo.Hash{byte(i)},
-				ParentHash: ethgo.Hash{byte(i - 1)},
-			}
-			require.NoError(t, tracker.blockContainer.AddBlock(block))
-		}
-
-		// check that we have correct number of cached blocks
-		require.Len(t, tracker.blockContainer.blocks, int(totalNumOfPreCachedBlocks))
-		require.Len(t, tracker.blockContainer.numToHashMap, int(totalNumOfPreCachedBlocks))
-
-		// track new block
-		latestBlock := &ethgo.Block{
-			Number:     block.Number + 1,
-			Hash:       ethgo.Hash{byte(block.Number + 1)},
-			ParentHash: block.Hash,
-		}
-
-		// try to notify invalid subscriber
-		require.NoError(t, tracker.trackBlock(latestBlock))
+		require.Error(t, err)
+		require.ErrorContains(t, err, "invalid configuration, event subscriber not set")
 	})
 
 	t.Run("Add block by block - have confirmed blocks - no logs in them", func(t *testing.T) {
@@ -305,7 +278,6 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		t.Parallel()
 
 		numBlockConfirmations := uint64(3)
-		totalNumOfPreCachedBlocks := numBlockConfirmations + 1
 
 		// mock logs return so that no confirmed block has any logs we need
 		logs := []*ethgo.Log{
@@ -317,36 +289,10 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.On("GetLogs", mock.Anything).Return(logs, nil).Once()
 
 		// create a tracker with invalid subscriber
-		tracker, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
+		_, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
 			store.NewTestTrackerStore(t), 0)
-		require.NoError(t, err)
-
-		tracker.config.BlockProvider = blockProviderMock
-
-		// add some blocks
-		var block *ethgo.Block
-		for i := uint64(1); i <= totalNumOfPreCachedBlocks; i++ {
-			block = &ethgo.Block{
-				Number:     i,
-				Hash:       ethgo.Hash{byte(i)},
-				ParentHash: ethgo.Hash{byte(i - 1)},
-			}
-			require.NoError(t, tracker.blockContainer.AddBlock(block))
-		}
-
-		// check that we have correct number of cached blocks
-		require.Len(t, tracker.blockContainer.blocks, int(totalNumOfPreCachedBlocks))
-		require.Len(t, tracker.blockContainer.numToHashMap, int(totalNumOfPreCachedBlocks))
-
-		// track new block
-		latestBlock := &ethgo.Block{
-			Number:     block.Number + 1,
-			Hash:       ethgo.Hash{byte(block.Number + 1)},
-			ParentHash: block.Hash,
-		}
-
-		// try to notify invalid subscriber
-		require.NoError(t, tracker.trackBlock(latestBlock))
+		require.Error(t, err)
+		require.ErrorContains(t, err, "invalid configuration, event subscriber not set")
 	})
 
 	t.Run("Add block by block - an error occurs on getting logs", func(t *testing.T) {
@@ -693,8 +639,8 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		require.NoError(t, err)
 
 		// Remove default.db file created during test
-		if _, err = os.Stat("./default.db"); err == nil {
-			os.RemoveAll("./default.db")
+		if _, err = os.Stat(defaultStore); err == nil {
+			os.RemoveAll(defaultStore)
 		}
 	})
 
@@ -716,8 +662,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		config.Logger = nil
 
 		_, err := NewEventTracker(config, store.NewTestTrackerStore(t), 0)
-		require.Error(t, err)
-		require.ErrorContains(t, err, "missing logger")
+		require.NoError(t, err)
 	})
 }
 
