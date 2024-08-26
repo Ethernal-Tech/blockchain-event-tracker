@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"sync"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 
 // EventSubscriber is an interface that defines methods for handling tracked logs (events) from a blockchain
 type EventSubscriber interface {
-	AddLog(log *ethgo.Log) error
+	AddLog(chainID *big.Int, log *ethgo.Log) error
 }
 
 // BlockProvider is an interface that defines methods for retrieving blocks and logs from a blockchain
@@ -24,6 +25,7 @@ type BlockProvider interface {
 	GetBlockByHash(hash ethgo.Hash, full bool) (*ethgo.Block, error)
 	GetBlockByNumber(i ethgo.BlockNumber, full bool) (*ethgo.Block, error)
 	GetLogs(filter *ethgo.LogFilter) ([]*ethgo.Log, error)
+	ChainID() (*big.Int, error)
 }
 
 // EventTrackerConfig is a struct that holds configuration of a EventTracker
@@ -84,6 +86,8 @@ type EventTracker struct {
 	blockContainer *TrackerBlockContainer
 
 	store eventStore.EventTrackerStore
+
+	chainID *big.Int
 }
 
 // NewEventTracker is a constructor function that creates a new instance of the EventTracker struct.
@@ -149,6 +153,11 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		config.BlockProvider = clt.Eth()
 	}
 
+	chainID, err := config.BlockProvider.ChainID()
+	if err != nil {
+		return nil, err
+	}
+
 	lastProcessedBlock, err := store.GetLastProcessedBlock()
 	if err != nil {
 		return nil, err
@@ -177,6 +186,7 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		closeCh:        make(chan struct{}),
 		blockTracker:   blocktracker.NewJSONBlockTracker(config.BlockProvider),
 		blockContainer: NewTrackerBlockContainer(lastProcessedBlock),
+		chainID:        chainID,
 	}, nil
 }
 
@@ -441,7 +451,7 @@ func (e *EventTracker) processLogs() error {
 			if log.Topics[0] == id {
 				filteredLogs = append(filteredLogs, log)
 
-				if err := e.config.EventSubscriber.AddLog(log); err != nil {
+				if err := e.config.EventSubscriber.AddLog(e.chainID, log); err != nil {
 					// we will only log this, since the store will have these logs
 					// and subscriber can just get what he missed from store
 					e.config.Logger.Error("An error occurred while passing event log to subscriber",
