@@ -75,8 +75,8 @@ func FuzzGetNewState(f *testing.F) {
 		}
 		providerMock.On("GetLogs", mock.Anything).Return(logs, nil)
 
-		testConfig := createTestTrackerConfig(t, data.NumBlockConfirmations, data.BatchSize, data.NumOfBlocksToReconcile)
-		testConfig.BlockProvider = providerMock
+		testConfig := createTestTrackerConfig(t, data.NumBlockConfirmations, data.BatchSize,
+			data.NumOfBlocksToReconcile, providerMock)
 
 		eventTracker := &EventTracker{
 			config:         testConfig,
