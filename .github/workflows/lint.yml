@@ -3,8 +3,8 @@ on:
   push:
     branches:
       - '*'
-    pull_request:
-      branches:
+  pull_request:
+    branches:
       - '*'
   workflow_dispatch:
 
@@ -13,18 +13,18 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-    - name: Setup Go
-      uses: actions/setup-go@v3
-      with:
-        go-version: 1.21.x
+      - name: Setup Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.21.x
 
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    - name: Install golangci-lint
-      run:  go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.49
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.49
 
-    - name: Lint
-      uses: golangci/golangci-lint-action@v3
-      with:
-        args: --timeout 10m --verbose
+      - name: Lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          args: --timeout 10m --verbose
