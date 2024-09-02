@@ -10,11 +10,10 @@ import (
 func TestTrackerBlockContainer_GetConfirmedBlocks(t *testing.T) {
 	t.Parallel()
 
-	tbc := NewTrackerBlockContainer(0)
-
 	t.Run("Number of blocks is greater than numBlockConfirmations", func(t *testing.T) {
 		t.Parallel()
 
+		tbc := NewTrackerBlockContainer(0)
 		tbc.blocks = []uint64{1, 2, 3, 4, 5}
 
 		numBlockConfirmations := uint64(2)
@@ -28,6 +27,7 @@ func TestTrackerBlockContainer_GetConfirmedBlocks(t *testing.T) {
 	t.Run("Number of blocks is less or equal than numBlockConfirmations", func(t *testing.T) {
 		t.Parallel()
 
+		tbc := NewTrackerBlockContainer(0)
 		tbc.blocks = []uint64{1, 2, 3}
 		numBlockConfirmations := uint64(3)
 
@@ -39,6 +39,7 @@ func TestTrackerBlockContainer_GetConfirmedBlocks(t *testing.T) {
 	t.Run("numBlockConfirmations is 0", func(t *testing.T) {
 		t.Parallel()
 
+		tbc := NewTrackerBlockContainer(0)
 		tbc.blocks = []uint64{1, 2, 3}
 		numBlockConfirmations := uint64(0)
 
@@ -50,6 +51,7 @@ func TestTrackerBlockContainer_GetConfirmedBlocks(t *testing.T) {
 	t.Run("numBlockConfirmations is 1", func(t *testing.T) {
 		t.Parallel()
 
+		tbc := NewTrackerBlockContainer(0)
 		tbc.blocks = []uint64{1, 2, 3}
 
 		numBlockConfirmations := uint64(1)
@@ -63,6 +65,7 @@ func TestTrackerBlockContainer_GetConfirmedBlocks(t *testing.T) {
 	t.Run("No blocks cached", func(t *testing.T) {
 		t.Parallel()
 
+		tbc := NewTrackerBlockContainer(0)
 		tbc.blocks = []uint64{}
 
 		numBlockConfirmations := uint64(0)
