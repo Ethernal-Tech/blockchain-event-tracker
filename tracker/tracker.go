@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -71,7 +72,7 @@ type EventTrackerConfig struct {
 	BlockProvider BlockProvider `json:"-"`
 
 	// Client is the jsonrpc client
-	RpcClient *jsonrpc.Client `json:"-"`
+	RPCClient *jsonrpc.Client `json:"-"`
 
 	// EventSubscriber is the subscriber that requires events tracked by the event tracker
 	EventSubscriber EventSubscriber `json:"-"`
@@ -250,8 +251,12 @@ func (e *EventTracker) Start() error {
 			return nil
 		}
 
-		if errc, ok := err.(net.Error); ok && errc.Timeout() {
-			err = setupBlockProvider(e.config, true)
+		if err != nil {
+			var netErr net.Error
+
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				err = setupBlockProvider(e.config, true)
+			}
 		}
 
 		return err
@@ -367,7 +372,7 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 
 		// get and add blocks in batch
 		for j := i; j <= end; j++ {
-			block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(j), false)
+			block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(j), false) //nolint:gosec
 			if err != nil {
 				e.config.Logger.Error("Getting new state for block batch failed on rpc call",
 					"fromBlock", i,
@@ -523,8 +528,8 @@ func setupBlockProvider(config *EventTrackerConfig, force bool) error {
 		return nil
 	}
 
-	if config.RpcClient != nil {
-		_ = config.RpcClient.Close() // try to close the previous transfer
+	if config.RPCClient != nil {
+		_ = config.RPCClient.Close() // try to close the previous transfer
 	}
 
 	clt, err := jsonrpc.NewClient(config.RPCEndpoint)
@@ -532,7 +537,7 @@ func setupBlockProvider(config *EventTrackerConfig, force bool) error {
 		return err
 	}
 
-	config.RpcClient = clt
+	config.RPCClient = clt
 	config.BlockProvider = clt.Eth()
 
 	return nil
