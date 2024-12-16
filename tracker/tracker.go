@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"net"
 	"sync"
 	"time"
 
@@ -68,6 +69,9 @@ type EventTrackerConfig struct {
 
 	// BlockProvider is the implementation of a provider that returns blocks and logs from tracked chain
 	BlockProvider BlockProvider `json:"-"`
+
+	// Client is the jsonrpc client
+	RpcClient *jsonrpc.Client `json:"-"`
 
 	// EventSubscriber is the subscriber that requires events tracked by the event tracker
 	EventSubscriber EventSubscriber `json:"-"`
@@ -144,13 +148,8 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 
 	// if block provider is not provided externally,
 	// we can start the ethgo one
-	if config.BlockProvider == nil {
-		clt, err := jsonrpc.NewClient(config.RPCEndpoint)
-		if err != nil {
-			return nil, err
-		}
-
-		config.BlockProvider = clt.Eth()
+	if err := setupBlockProvider(config, false); err != nil {
+		return nil, err
 	}
 
 	chainID, err := config.BlockProvider.ChainID()
@@ -249,6 +248,10 @@ func (e *EventTracker) Start() error {
 
 		if common.IsContextDone(err) {
 			return nil
+		}
+
+		if errc, ok := err.(net.Error); ok && errc.Timeout() {
+			err = setupBlockProvider(e.config, true)
 		}
 
 		return err
@@ -513,4 +516,24 @@ func (e *EventTracker) getLogsQuery(from, to uint64) *ethgo.LogFilter {
 	filter.SetToUint64(to)
 
 	return filter
+}
+
+func setupBlockProvider(config *EventTrackerConfig, force bool) error {
+	if config.BlockProvider != nil && !force {
+		return nil
+	}
+
+	if config.RpcClient != nil {
+		_ = config.RpcClient.Close() // try to close the previous transfer
+	}
+
+	clt, err := jsonrpc.NewClient(config.RPCEndpoint)
+	if err != nil {
+		return err
+	}
+
+	config.RpcClient = clt
+	config.BlockProvider = clt.Eth()
+
+	return nil
 }
