@@ -239,7 +239,7 @@ func (e *EventTracker) Start() error {
 		if err := e.syncOnStart(); err != nil {
 			e.config.Logger.Error("Syncing up on start failed.", "err", err)
 
-			return err
+			return handleError(err, e.config)
 		}
 
 		// start the polling of blocks
@@ -251,15 +251,7 @@ func (e *EventTracker) Start() error {
 			return nil
 		}
 
-		if err != nil {
-			var netErr net.Error
-
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				err = setupBlockProvider(e.config, true)
-			}
-		}
-
-		return err
+		return handleError(err, e.config)
 	})
 
 	return nil
@@ -521,6 +513,18 @@ func (e *EventTracker) getLogsQuery(from, to uint64) *ethgo.LogFilter {
 	filter.SetToUint64(to)
 
 	return filter
+}
+
+func handleError(err error, config *EventTrackerConfig) error {
+	var netErr net.Error
+
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		if serr := setupBlockProvider(config, true); serr != nil {
+			return errors.Join(err, serr)
+		}
+	}
+
+	return err
 }
 
 func setupBlockProvider(config *EventTrackerConfig, force bool) error {
