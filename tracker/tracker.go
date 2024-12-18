@@ -2,8 +2,10 @@ package tracker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"sync"
 	"time"
 
@@ -68,6 +70,9 @@ type EventTrackerConfig struct {
 
 	// BlockProvider is the implementation of a provider that returns blocks and logs from tracked chain
 	BlockProvider BlockProvider `json:"-"`
+
+	// Client is the jsonrpc client
+	RPCClient *jsonrpc.Client `json:"-"`
 
 	// EventSubscriber is the subscriber that requires events tracked by the event tracker
 	EventSubscriber EventSubscriber `json:"-"`
@@ -144,13 +149,8 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 
 	// if block provider is not provided externally,
 	// we can start the ethgo one
-	if config.BlockProvider == nil {
-		clt, err := jsonrpc.NewClient(config.RPCEndpoint)
-		if err != nil {
-			return nil, err
-		}
-
-		config.BlockProvider = clt.Eth()
+	if err := setupBlockProvider(config, false); err != nil {
+		return nil, err
 	}
 
 	chainID, err := config.BlockProvider.ChainID()
@@ -234,12 +234,26 @@ func (e *EventTracker) Start() error {
 		cancelFn()
 	}()
 
+	handleError := func(err error) error {
+		var netErr net.Error
+
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			e.config.Logger.Warn("Timeout error occurred; attempting to recreate connection", "err", err)
+
+			if serr := setupBlockProvider(e.config, true); serr != nil {
+				e.config.Logger.Error("Failed to recreate connection after timeout", "err", serr)
+			}
+		}
+
+		return err
+	}
+
 	go common.RetryForever(ctx, time.Second, func(context.Context) error {
 		// sync up all missed blocks on start if it is not already sync up
 		if err := e.syncOnStart(); err != nil {
 			e.config.Logger.Error("Syncing up on start failed.", "err", err)
 
-			return err
+			return handleError(err)
 		}
 
 		// start the polling of blocks
@@ -251,7 +265,7 @@ func (e *EventTracker) Start() error {
 			return nil
 		}
 
-		return err
+		return handleError(err)
 	})
 
 	return nil
@@ -364,7 +378,7 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 
 		// get and add blocks in batch
 		for j := i; j <= end; j++ {
-			block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(j), false)
+			block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(j), false) //nolint:gosec
 			if err != nil {
 				e.config.Logger.Error("Getting new state for block batch failed on rpc call",
 					"fromBlock", i,
@@ -513,4 +527,36 @@ func (e *EventTracker) getLogsQuery(from, to uint64) *ethgo.LogFilter {
 	filter.SetToUint64(to)
 
 	return filter
+}
+
+// setupBlockProvider initializes or resets the BlockProvider for the EventTrackerConfig.
+// If the BlockProvider is already set and the force flag is false, it does nothing.
+// Otherwise, it ensures the RPCClient is properly closed (if it exists) and creates a new
+// JSON-RPC client using the provided RPCEndpoint. The newly created client is then used
+// to set up the BlockProvider.
+//
+// Input:
+//   - config (*EventTrackerConfig): A pointer to EventTrackerConfig containing the configuration details.
+//   - force (bool): A boolean flag that forces reinitialization of the BlockProvider even if it exists.
+//
+// Returns:
+//   - an error if the JSON-RPC client creation fails, or nil on success.
+func setupBlockProvider(config *EventTrackerConfig, force bool) error {
+	if config.BlockProvider != nil && !force {
+		return nil
+	}
+
+	if config.RPCClient != nil {
+		_ = config.RPCClient.Close() // try to close the previous transfer
+	}
+
+	clt, err := jsonrpc.NewClient(config.RPCEndpoint)
+	if err != nil {
+		return err
+	}
+
+	config.RPCClient = clt
+	config.BlockProvider = clt.Eth()
+
+	return nil
 }

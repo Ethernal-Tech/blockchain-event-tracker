@@ -205,7 +205,7 @@ func (t *TrackerBlockContainer) IsOutOfSync(block *ethgo.Block) bool {
 // Outputs:
 //   - A slice of uint64 representing the block numbers of confirmed blocks.
 func (t *TrackerBlockContainer) GetConfirmedBlocks(numBlockConfirmations uint64) []uint64 {
-	numBlockConfirmationsInt := int(numBlockConfirmations) //nollint:gosec
+	numBlockConfirmationsInt := int(numBlockConfirmations) //nolint:gosec
 	if len(t.blocks) > numBlockConfirmationsInt {
 		return t.blocks[:len(t.blocks)-numBlockConfirmationsInt]
 	}
