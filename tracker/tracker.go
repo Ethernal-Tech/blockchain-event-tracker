@@ -234,12 +234,26 @@ func (e *EventTracker) Start() error {
 		cancelFn()
 	}()
 
+	handleError := func(err error) error {
+		var netErr net.Error
+
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			e.config.Logger.Warn("Timeout error occurred; attempting to recreate connection", "err", err)
+
+			if serr := setupBlockProvider(e.config, true); serr != nil {
+				e.config.Logger.Error("Failed to recreate connection after timeout", "err", serr)
+			}
+		}
+
+		return err
+	}
+
 	go common.RetryForever(ctx, time.Second, func(context.Context) error {
 		// sync up all missed blocks on start if it is not already sync up
 		if err := e.syncOnStart(); err != nil {
 			e.config.Logger.Error("Syncing up on start failed.", "err", err)
 
-			return handleError(err, e.config)
+			return handleError(err)
 		}
 
 		// start the polling of blocks
@@ -251,7 +265,7 @@ func (e *EventTracker) Start() error {
 			return nil
 		}
 
-		return handleError(err, e.config)
+		return handleError(err)
 	})
 
 	return nil
@@ -515,18 +529,18 @@ func (e *EventTracker) getLogsQuery(from, to uint64) *ethgo.LogFilter {
 	return filter
 }
 
-func handleError(err error, config *EventTrackerConfig) error {
-	var netErr net.Error
-
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		if serr := setupBlockProvider(config, true); serr != nil {
-			return errors.Join(err, serr)
-		}
-	}
-
-	return err
-}
-
+// setupBlockProvider initializes or resets the BlockProvider for the EventTrackerConfig.
+// If the BlockProvider is already set and the force flag is false, it does nothing.
+// Otherwise, it ensures the RPCClient is properly closed (if it exists) and creates a new
+// JSON-RPC client using the provided RPCEndpoint. The newly created client is then used
+// to set up the BlockProvider.
+//
+// Input:
+//   - config (*EventTrackerConfig): A pointer to EventTrackerConfig containing the configuration details.
+//   - force (bool): A boolean flag that forces reinitialization of the BlockProvider even if it exists.
+//
+// Returns:
+//   - an error if the JSON-RPC client creation fails, or nil on success.
 func setupBlockProvider(config *EventTrackerConfig, force bool) error {
 	if config.BlockProvider != nil && !force {
 		return nil
