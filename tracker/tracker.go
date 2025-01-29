@@ -163,17 +163,21 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		return nil, err
 	}
 
-	if lastProcessedBlock == 0 && config.NumOfBlocksToReconcile > 0 {
+	if lastProcessedBlock < startBlockFromGenesis {
+		// if we don't have last processed block, or it is less than startBlockFromGenesis,
+		// we will start from startBlockFromGenesis
 		lastProcessedBlock = startBlockFromGenesis
+	}
 
+	if config.NumOfBlocksToReconcile > 0 {
 		latestBlock, err := config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
 		if err != nil {
 			return nil, err
 		}
 
 		if latestBlock.Number > config.NumOfBlocksToReconcile &&
-			startBlockFromGenesis < latestBlock.Number-config.NumOfBlocksToReconcile {
-			// if this is a fresh start, and we missed too much blocks,
+			lastProcessedBlock < latestBlock.Number-config.NumOfBlocksToReconcile {
+			// if we missed too much blocks,
 			// then we should start syncing from
 			// latestBlock.Number - NumOfBlocksToReconcile
 			lastProcessedBlock = latestBlock.Number - config.NumOfBlocksToReconcile
