@@ -163,9 +163,13 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		return nil, err
 	}
 
-	if lastProcessedBlock == 0 && config.NumOfBlocksToReconcile > 0 {
+	if lastProcessedBlock < startBlockFromGenesis {
+		// if we don't have last processed block, or it is less than startBlockFromGenesis,
+		// we will start from startBlockFromGenesis
 		lastProcessedBlock = startBlockFromGenesis
+	}
 
+	if config.NumOfBlocksToReconcile > 0 {
 		latestBlock, err := config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
 		if err != nil {
 			return nil, err
