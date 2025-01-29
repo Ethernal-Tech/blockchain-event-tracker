@@ -266,6 +266,7 @@ func TestNewEventTracker(t *testing.T) {
 				cfg := &EventTrackerConfig{
 					Logger: hclog.NewNullLogger(),
 				}
+
 				return cfg, nil, nil, nil
 			},
 			startBlockFromGenesis: 0,
