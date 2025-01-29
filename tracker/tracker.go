@@ -147,6 +147,7 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 	}
 
 	updateLastProcessedBlock := false
+
 	if lastProcessedBlock < startBlockFromGenesis {
 		// if we don't have last processed block, or it is less than startBlockFromGenesis,
 		// we will start from startBlockFromGenesis
@@ -229,6 +230,7 @@ func (e *EventTracker) Start() error {
 		select {
 		case <-ctx.Done():
 			e.config.Logger.Info("Event tracker stopped")
+
 			return nil
 		default:
 		}
