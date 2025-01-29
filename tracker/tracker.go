@@ -176,7 +176,7 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		}
 
 		if latestBlock.Number > config.NumOfBlocksToReconcile &&
-			startBlockFromGenesis < latestBlock.Number-config.NumOfBlocksToReconcile {
+			lastProcessedBlock < latestBlock.Number-config.NumOfBlocksToReconcile {
 			// if this is a fresh start, and we missed too much blocks,
 			// then we should start syncing from
 			// latestBlock.Number - NumOfBlocksToReconcile
