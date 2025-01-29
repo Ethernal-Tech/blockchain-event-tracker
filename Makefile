@@ -1,3 +1,9 @@
+COMMON_MOCKERY_PARAMS=--disable-version-string --with-expecter --exported
+
+.PHONY: generate-mocks
+generate-mocks:	
+	mockery ${COMMON_MOCKERY_PARAMS}
+
 .PHONY: check-go
 check-go:
 	@which go > /dev/null || (echo "Go is not installed.. Please install and try again."; exit 1)
