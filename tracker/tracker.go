@@ -18,6 +18,12 @@ import (
 	hcf "github.com/hashicorp/go-hclog"
 )
 
+// MaxBlockGapForLatestSync defines the maximum allowed block gap
+// for starting synchronization from the latest block.
+// If the gap between startBlock and latestBlock exceeds this value,
+// synchronization will start from the first block instead.
+const maxBlockGapForLatestSync = 10
+
 // EventSubscriber is an interface that defines methods for handling tracked logs (events) from a blockchain
 type EventSubscriber interface {
 	AddLog(chainID *big.Int, log *ethgo.Log) error
@@ -372,8 +378,8 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 		startBlock = latestBlock.Number - e.config.NumOfBlocksToReconcile
 	}
 
-	// it is not optimal to start from latest block if we do not have anything in memory
-	if len(e.blockContainer.blocks) == 0 {
+	// it is not optimal to start from the latest block if there are too many blocks for syncing
+	if latestBlock.Number-startBlock+1 > maxBlockGapForLatestSync {
 		return e.getNewStateFromFirst(startBlock, latestBlock)
 	}
 
