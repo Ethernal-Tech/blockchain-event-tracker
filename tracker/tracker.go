@@ -379,7 +379,7 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 	}
 
 	// it is not optimal to start from the latest block if there are too many blocks for syncing
-	if latestBlock.Number-startBlock+1 > maxBlockGapForLatestSync {
+	if latestBlock.Number-startBlock+1 > max(e.config.NumBlockConfirmations, maxBlockGapForLatestSync) {
 		return e.getNewStateFromFirst(startBlock, latestBlock)
 	}
 
