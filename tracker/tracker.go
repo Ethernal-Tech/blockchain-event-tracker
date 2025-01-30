@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -357,10 +358,13 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 	e.blockContainer.AcquireWriteLock()
 	defer e.blockContainer.ReleaseWriteLock()
 
-	// clean old state
-	e.blockContainer.CleanState()
+	// if latest block already in memory -> exit
+	if e.blockContainer.BlockExists(latestBlock) {
+		return nil
+	}
 
 	startBlock := lastProcessedBlock + 1
+	blocksToAdd := []*ethgo.Block{latestBlock}
 
 	// sanitize startBlock from which we will start polling for blocks
 	if e.config.NumOfBlocksToReconcile > 0 &&
@@ -369,54 +373,52 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 		startBlock = latestBlock.Number - e.config.NumOfBlocksToReconcile
 	}
 
-	// get blocks in batches
-	for i := startBlock; i < latestBlock.Number; i += e.config.SyncBatchSize {
-		end := i + e.config.SyncBatchSize - 1
-		if end > latestBlock.Number {
-			// we go until the latest block, since we don't need to
-			// query for it using an rpc point, since we already have it
-			end = latestBlock.Number - 1
-		}
+	for blockNum := latestBlock.Number - 1; blockNum >= startBlock; blockNum-- {
+		block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(blockNum), false) //nolint:gosec
+		if err != nil {
+			e.config.Logger.Error("Getting block failed", "blockNum", blockNum, "err", err)
 
-		e.config.Logger.Info("Getting new state for block batch", "fromBlock", i, "toBlock", end)
-
-		// get and add blocks in batch
-		for j := i; j <= end; j++ {
-			block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(j), false) //nolint:gosec
-			if err != nil {
-				e.config.Logger.Error("Getting new state for block batch failed on rpc call",
-					"fromBlock", i,
-					"toBlock", end,
-					"currentBlock", j,
-					"err", err)
-
-				return err
-			}
-
-			if err := e.blockContainer.AddBlock(block); err != nil {
-				return err
-			}
-		}
-
-		// now process logs from confirmed blocks if any
-		if err := e.processLogs(); err != nil {
 			return err
 		}
+
+		if e.blockContainer.BlockExists(block) {
+			break
+		}
+
+		if blocksToAdd[len(blocksToAdd)-1].ParentHash != block.Hash {
+			return fmt.Errorf("reorg happened during retrieving new state: block = %d", blockNum)
+		}
+
+		blocksToAdd = append(blocksToAdd, block)
 	}
 
-	// add latest block
-	if err := e.blockContainer.AddBlock(latestBlock); err != nil {
-		return err
-	}
+	slices.Reverse(blocksToAdd)
+	// remove all blocks from memory that are not part of the current canonical chain
+	e.blockContainer.RemoveAllAfterParentOf(blocksToAdd[0])
+	// math.ceil(x/y) == (x+y-1)/x
+	batchesCnt := (uint64(len(blocksToAdd)) + e.config.SyncBatchSize - 1) / e.config.SyncBatchSize
+	offset := uint64(0)
 
-	// process logs if there are more confirmed events
-	if err := e.processLogs(); err != nil {
-		e.config.Logger.Error("Getting new state failed",
-			"lastProcessedBlock", lastProcessedBlock,
-			"latestBlockFromRpc", latestBlock.Number,
-			"err", err)
+	for i := uint64(0); i < batchesCnt; i++ {
+		nextOffset := min(offset+e.config.SyncBatchSize, uint64(len(blocksToAdd)))
 
-		return err
+		for j := offset; j < nextOffset; j++ {
+			if err := e.blockContainer.AddBlock(blocksToAdd[j]); err != nil {
+				return err
+			}
+		}
+
+		// process logs if there are more confirmed events
+		if err := e.processLogs(); err != nil {
+			e.config.Logger.Error("Getting new state failed",
+				"lastProcessedBlock", lastProcessedBlock,
+				"latestBlockFromRpc", blocksToAdd[len(blocksToAdd)-1].Number,
+				"err", err)
+
+			return err
+		}
+
+		offset = nextOffset
 	}
 
 	e.config.Logger.Info("Getting new state finished",

@@ -104,6 +104,46 @@ func (t *TrackerBlockContainer) AddBlock(block *ethgo.Block) error {
 	return nil
 }
 
+// BlockExists checks if a block is already present in the container memory.
+//
+// Inputs:
+// - block (*ethgo.Block): The Ethereum block to check.
+//
+// Returns:
+// - true if the block exists in the memory container and matches the stored hash.
+func (t *TrackerBlockContainer) BlockExists(block *ethgo.Block) bool {
+	hash, exists := t.numToHashMap[block.Number]
+
+	return exists && hash == block.Hash
+}
+
+// RemoveAllAfterParentOf finds the parent of the given block and removes all subsequent blocks
+// from the memory container.
+//
+// Inputs:
+// - block (*ethgo.Block): The Ethereum block whose parent's position will be used as a reference.
+func (t *TrackerBlockContainer) RemoveAllAfterParentOf(block *ethgo.Block) {
+	indx := -1
+
+	for i, blockNum := range t.blocks {
+		if t.numToHashMap[blockNum] == block.ParentHash {
+			indx = i
+
+			break
+		}
+	}
+
+	if indx == -1 {
+		t.CleanState()
+	} else {
+		for _, oldBlockNum := range t.blocks[indx+1:] {
+			delete(t.numToHashMap, oldBlockNum)
+		}
+
+		t.blocks = t.blocks[:indx+1]
+	}
+}
+
 // RemoveBlocks removes processed blocks from cached maps,
 // and updates the lastProcessedConfirmedBlock variable, to the last processed block.
 //
