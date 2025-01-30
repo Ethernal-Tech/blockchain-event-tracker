@@ -1,11 +1,15 @@
 package tracker
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/Ethernal-Tech/ethgo"
 )
+
+// errReorgHappened indicates that a blockchain reorganization has occurred.
+var errReorgHappened = errors.New("reorg happened")
 
 // TrackerBlockContainer is a struct used to cache and manage tracked blocks from tracked chain.
 // It keeps a map of block numbers to hashes, a slice of block numbers to process,
@@ -95,7 +99,7 @@ func (t *TrackerBlockContainer) LastCachedBlock() uint64 {
 //     once it hits confirmation number.
 func (t *TrackerBlockContainer) AddBlock(block *ethgo.Block) error {
 	if hash, exists := t.numToHashMap[block.Number-1]; len(t.blocks) > 0 && (!exists || block.ParentHash != hash) {
-		return fmt.Errorf("no parent for block %d, or a reorg happened", block.Number)
+		return fmt.Errorf("%w for block %d", errReorgHappened, block.Number)
 	}
 
 	t.numToHashMap[block.Number] = block.Hash
