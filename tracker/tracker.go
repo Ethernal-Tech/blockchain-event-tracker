@@ -22,7 +22,7 @@ import (
 // for starting synchronization from the latest block.
 // If the gap between startBlock and latestBlock exceeds this value,
 // synchronization will start from the first block instead.
-const maxBlockGapForLatestSync = 10
+const maxBlockGapForLatestSync = 16
 
 // EventSubscriber is an interface that defines methods for handling tracked logs (events) from a blockchain
 type EventSubscriber interface {
