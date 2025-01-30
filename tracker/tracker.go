@@ -389,10 +389,7 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 func (e *EventTracker) getNewStateFromFirst(startBlock uint64, latestBlock *ethgo.Block) error {
 	e.blockContainer.CleanState() // clean old state
 
-	reorgHappened := false
-
 	// get blocks in batches
-mainLoop:
 	for i := startBlock; i < latestBlock.Number; i += e.config.SyncBatchSize {
 		end := i + e.config.SyncBatchSize - 1
 		if end > latestBlock.Number {
@@ -417,12 +414,6 @@ mainLoop:
 			}
 
 			if err := e.blockContainer.AddBlock(block); err != nil {
-				if errors.Is(err, errReorgHappened) {
-					reorgHappened = true
-
-					break mainLoop
-				}
-
 				return err
 			}
 		}
@@ -434,10 +425,8 @@ mainLoop:
 	}
 
 	// add latest block only if reorg did not happen
-	if !reorgHappened {
-		if err := e.blockContainer.AddBlock(latestBlock); err != nil {
-			return err
-		}
+	if err := e.blockContainer.AddBlock(latestBlock); err != nil {
+		return err
 	}
 
 	// process logs if there are more confirmed events
