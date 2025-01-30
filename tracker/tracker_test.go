@@ -456,7 +456,6 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			store.CreateTestLogForStateSyncEvent(t, 6, 11),
 			store.CreateTestLogForStateSyncEvent(t, 10, 1),
 		}
-		blockProviderMock.logs = logs
 		// we will have three groups of confirmed blocks
 		// have cached blocks, 1, 2, 3, 4
 		// cleans state
@@ -466,10 +465,12 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		// third batch of gotten blocks: 9, 10, 11, 12 - confirmed blocks: 6, 7, 8, 9
 		// process the latest block as well (block 13) - confirmed blocks: 10
 		// just mock the call, it will use the provider.logs map to handle proper returns
-		blockProviderMock.On("GetLogs", mock.Anything).Return(nil, nil).Times(len(logs))
+		blockProviderMock.On("GetLogs", mock.Anything).Return(logs[0:1], nil).Once()
+		blockProviderMock.On("GetLogs", mock.Anything).Return(logs[1:2], nil).Once()
+		blockProviderMock.On("GetLogs", mock.Anything).Return(logs[2:], nil).Once()
 		// just mock the call, it will use the provider.blocks map to handle proper returns
 		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(
-			int(numOfMissedBlocks + numOfCachedBlocks))
+			int(numOfMissedBlocks + 1))
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, blockProviderMock),
 			store.NewTestTrackerStore(t), 0)
