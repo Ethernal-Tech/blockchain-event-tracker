@@ -18,6 +18,12 @@ import (
 	hcf "github.com/hashicorp/go-hclog"
 )
 
+// MaxBlockGapForLatestSync defines the maximum allowed block gap
+// for starting synchronization from the latest block.
+// If the gap between startBlock and latestBlock exceeds this value,
+// synchronization will start from the first block instead.
+const maxBlockGapForLatestSync = 16
+
 // EventSubscriber is an interface that defines methods for handling tracked logs (events) from a blockchain
 type EventSubscriber interface {
 	AddLog(chainID *big.Int, log *ethgo.Log) error
@@ -364,7 +370,6 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 	}
 
 	startBlock := lastProcessedBlock + 1
-	blocksToAdd := []*ethgo.Block{latestBlock}
 
 	// sanitize startBlock from which we will start polling for blocks
 	if e.config.NumOfBlocksToReconcile > 0 &&
@@ -372,6 +377,76 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 		latestBlock.Number-e.config.NumOfBlocksToReconcile > lastProcessedBlock {
 		startBlock = latestBlock.Number - e.config.NumOfBlocksToReconcile
 	}
+
+	// it is not optimal to start from the latest block if there are too many blocks for syncing
+	if latestBlock.Number-startBlock+1 > max(e.config.NumBlockConfirmations, maxBlockGapForLatestSync) {
+		return e.getNewStateFromFirst(startBlock, latestBlock)
+	}
+
+	return e.getNewStateFromLatest(startBlock, latestBlock)
+}
+
+func (e *EventTracker) getNewStateFromFirst(startBlock uint64, latestBlock *ethgo.Block) error {
+	e.blockContainer.CleanState() // clean old state
+
+	// get blocks in batches
+	for i := startBlock; i < latestBlock.Number; i += e.config.SyncBatchSize {
+		end := i + e.config.SyncBatchSize - 1
+		if end > latestBlock.Number {
+			// we go until the latest block, since we don't need to
+			// query for it using an rpc point, since we already have it
+			end = latestBlock.Number - 1
+		}
+
+		e.config.Logger.Info("Getting new state for block batch", "fromBlock", i, "toBlock", end)
+
+		// get and add blocks in batch
+		for j := i; j <= end; j++ {
+			block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(j), false) //nolint:gosec
+			if err != nil {
+				e.config.Logger.Error("Getting new state for block batch failed on rpc call",
+					"fromBlock", i,
+					"toBlock", end,
+					"currentBlock", j,
+					"err", err)
+
+				return err
+			}
+
+			if err := e.blockContainer.AddBlock(block); err != nil {
+				return err
+			}
+		}
+
+		// now process logs from confirmed blocks if any
+		if err := e.processLogs(); err != nil {
+			return err
+		}
+	}
+
+	// add latest block only if reorg did not happen
+	if err := e.blockContainer.AddBlock(latestBlock); err != nil {
+		return err
+	}
+
+	// process logs if there are more confirmed events
+	if err := e.processLogs(); err != nil {
+		e.config.Logger.Error("Getting new state failed",
+			"latestBlockFromRpc", latestBlock.Number,
+			"err", err)
+
+		return err
+	}
+
+	e.config.Logger.Info("Getting new state finished",
+		"newLastProcessedBlock", e.blockContainer.LastProcessedBlockLocked(),
+		"latestBlockFromRpc", latestBlock.Number)
+
+	return nil
+}
+
+func (e *EventTracker) getNewStateFromLatest(startBlock uint64, latestBlock *ethgo.Block) error {
+	blocksToAdd := []*ethgo.Block{latestBlock}
 
 	for blockNum := latestBlock.Number - 1; blockNum >= startBlock; blockNum-- {
 		block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(blockNum), false) //nolint:gosec
@@ -411,7 +486,6 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 		// process logs if there are more confirmed events
 		if err := e.processLogs(); err != nil {
 			e.config.Logger.Error("Getting new state failed",
-				"lastProcessedBlock", lastProcessedBlock,
 				"latestBlockFromRpc", blocksToAdd[len(blocksToAdd)-1].Number,
 				"err", err)
 

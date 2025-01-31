@@ -444,7 +444,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 
 		batchSize := uint64(4)
 		numBlockConfirmations := uint64(3)
-		numOfMissedBlocks := batchSize * 2
+		numOfMissedBlocks := batchSize * 4
 		numOfCachedBlocks := uint64(4)
 
 		blockProviderMock := &mockProvider{blocks: make(map[uint64]*ethgo.Block)}
@@ -467,10 +467,12 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		// just mock the call, it will use the provider.logs map to handle proper returns
 		blockProviderMock.On("GetLogs", mock.Anything).Return(logs[0:1], nil).Once()
 		blockProviderMock.On("GetLogs", mock.Anything).Return(logs[1:2], nil).Once()
-		blockProviderMock.On("GetLogs", mock.Anything).Return(logs[2:], nil).Once()
+		blockProviderMock.On("GetLogs", mock.Anything).Return(logs[2:3], nil).Once()
+		blockProviderMock.On("GetLogs", mock.Anything).Return(logs[3:], nil).Once()
+		blockProviderMock.On("GetLogs", mock.Anything).Return(nil, nil).Times(2)
 		// just mock the call, it will use the provider.blocks map to handle proper returns
 		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(
-			int(numOfMissedBlocks + 1))
+			int(numOfMissedBlocks + numOfCachedBlocks))
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, blockProviderMock),
 			store.NewTestTrackerStore(t), 0)
