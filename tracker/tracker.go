@@ -226,6 +226,12 @@ func (e *EventTracker) Start() error {
 			lastFinalizedBlockNumber, lastProcessedBlock)
 	}
 
+	syncBatchSizeCorrected := e.config.SyncBatchSize
+	if syncBatchSizeCorrected == 0 {
+		// if sync batch size is 0, we will sync one block at a time
+		syncBatchSizeCorrected = 1
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -236,9 +242,10 @@ func (e *EventTracker) Start() error {
 		}
 
 		fromBlock := lastProcessedBlock + 1
-		toBlock := fromBlock + e.config.SyncBatchSize
+		toBlock := fromBlock + e.config.SyncBatchSize // if SyncBatchSize is 0, we get block by block, e.g. 10-10
 
-		numBatches := int(math.Ceil(float64(lastFinalizedBlockNumber-fromBlock+1) / float64(e.config.SyncBatchSize)))
+		// if SyncBatchSize is 0, we need to use the corrected size because we can not divide by 0
+		numBatches := int(math.Ceil(float64(lastFinalizedBlockNumber-fromBlock+1) / float64(syncBatchSizeCorrected)))
 
 		for i := 0; i < numBatches; i++ {
 			if toBlock > lastFinalizedBlock.Number {
@@ -251,14 +258,14 @@ func (e *EventTracker) Start() error {
 
 			lastProcessedBlock = toBlock
 			fromBlock = toBlock + 1
-			toBlock += e.config.SyncBatchSize
+			toBlock += syncBatchSizeCorrected // if SyncBatchSize is 0, we get block by block, e.g. 10-10, so use a corrected batch size
 		}
 
 		lastFinalizedBlockNumber = e.waitForNewFinalizedBlock(ctx, lastFinalizedBlockNumber)
 	}
 }
 
-// waitForNewFinalizedBlock is waits for a new finalized block to appear on tracked network
+// waitForNewFinalizedBlock waits for a new finalized block to appear on tracked network
 func (e *EventTracker) waitForNewFinalizedBlock(ctx context.Context, lastSeenBlock uint64) uint64 {
 	ticker := time.NewTicker(e.config.PollInterval)
 	defer ticker.Stop()
