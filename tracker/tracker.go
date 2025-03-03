@@ -2,27 +2,16 @@ package tracker
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"math"
 	"math/big"
-	"net"
-	"slices"
-	"sync"
 	"time"
 
-	"github.com/Ethernal-Tech/blockchain-event-tracker/common"
 	eventStore "github.com/Ethernal-Tech/blockchain-event-tracker/store"
 	"github.com/Ethernal-Tech/ethgo"
-	"github.com/Ethernal-Tech/ethgo/blocktracker"
 	"github.com/Ethernal-Tech/ethgo/jsonrpc"
 	hcf "github.com/hashicorp/go-hclog"
 )
-
-// MaxBlockGapForLatestSync defines the maximum allowed block gap
-// for starting synchronization from the latest block.
-// If the gap between startBlock and latestBlock exceeds this value,
-// synchronization will start from the first block instead.
-const maxBlockGapForLatestSync = 16
 
 // EventSubscriber is an interface that defines methods for handling tracked logs (events) from a blockchain
 type EventSubscriber interface {
@@ -31,7 +20,6 @@ type EventSubscriber interface {
 
 // BlockProvider is an interface that defines methods for retrieving blocks and logs from a blockchain
 type BlockProvider interface {
-	GetBlockByHash(hash ethgo.Hash, full bool) (*ethgo.Block, error)
 	GetBlockByNumber(i ethgo.BlockNumber, full bool) (*ethgo.Block, error)
 	GetLogs(filter *ethgo.LogFilter) ([]*ethgo.Log, error)
 	ChainID() (*big.Int, error)
@@ -41,14 +29,6 @@ type BlockProvider interface {
 type EventTrackerConfig struct {
 	// RPCEndpoint is the full json rpc url on some node on a tracked chain
 	RPCEndpoint string `json:"rpcEndpoint"`
-
-	// NumBlockConfirmations defines how many blocks must pass from a certain block,
-	// to consider that block as final on the tracked chain.
-	// This is very important for reorgs, and events from the given block will only be
-	// processed if it hits this confirmation mark.
-	// (e.g., NumBlockConfirmations = 3, and if the last tracked block is 10,
-	// events from block 10, will only be processed when we get block 13 from the tracked chain)
-	NumBlockConfirmations uint64 `json:"numBlockConfirmations"`
 
 	// SyncBatchSize defines a batch size of blocks that will be gotten from tracked chain,
 	// when tracker is out of sync and needs to sync a number of blocks.
@@ -92,10 +72,6 @@ type EventTracker struct {
 	config *EventTrackerConfig
 
 	closeCh chan struct{}
-	once    sync.Once
-
-	blockTracker   blocktracker.BlockTrackerInterface
-	blockContainer *TrackerBlockContainer
 
 	store eventStore.EventTrackerStore
 
@@ -170,14 +146,17 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		return nil, err
 	}
 
+	updateLastProcessedBlock := false
+
 	if lastProcessedBlock < startBlockFromGenesis {
 		// if we don't have last processed block, or it is less than startBlockFromGenesis,
 		// we will start from startBlockFromGenesis
 		lastProcessedBlock = startBlockFromGenesis
+		updateLastProcessedBlock = true
 	}
 
 	if config.NumOfBlocksToReconcile > 0 {
-		latestBlock, err := config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
+		latestBlock, err := config.BlockProvider.GetBlockByNumber(ethgo.Finalized, false)
 		if err != nil {
 			return nil, err
 		}
@@ -188,37 +167,22 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 			// then we should start syncing from
 			// latestBlock.Number - NumOfBlocksToReconcile
 			lastProcessedBlock = latestBlock.Number - config.NumOfBlocksToReconcile
+			updateLastProcessedBlock = true
+		}
+	}
+
+	if updateLastProcessedBlock {
+		if err := store.InsertLastProcessedBlock(lastProcessedBlock); err != nil {
+			return nil, fmt.Errorf("failed to update last processed block: %w", err)
 		}
 	}
 
 	return &EventTracker{
-		config:         config,
-		store:          store,
-		closeCh:        make(chan struct{}),
-		blockTracker:   blocktracker.NewJSONBlockTracker(config.BlockProvider),
-		blockContainer: NewTrackerBlockContainer(lastProcessedBlock),
-		chainID:        chainID,
+		config:  config,
+		store:   store,
+		closeCh: make(chan struct{}),
+		chainID: chainID,
 	}, nil
-}
-
-// Close closes the EventTracker by closing the closeCh channel.
-// This method is used to signal the goroutines to stop.
-//
-// Example Usage:
-//
-//	tracker := NewEventTracker(config)
-//	tracker.Start()
-//	defer tracker.Close()
-//
-// Inputs: None
-//
-// Flow:
-//  1. The Close() method is called on an instance of EventTracker.
-//  2. The closeCh channel is closed, which signals the goroutines to stop.
-//
-// Outputs: None
-func (e *EventTracker) Close() {
-	close(e.closeCh)
 }
 
 // Start is a method in the EventTracker struct that starts the tracking of blocks
@@ -232,7 +196,6 @@ func (e *EventTracker) Close() {
 func (e *EventTracker) Start() error {
 	e.config.Logger.Info("Starting event tracker",
 		"jsonRpcEndpoint", e.config.RPCEndpoint,
-		"numBlockConfirmations", e.config.NumBlockConfirmations,
 		"pollInterval", e.config.PollInterval,
 		"syncBatchSize", e.config.SyncBatchSize,
 		"numOfBlocksToReconcile", e.config.NumOfBlocksToReconcile,
@@ -245,287 +208,94 @@ func (e *EventTracker) Start() error {
 		cancelFn()
 	}()
 
-	handleError := func(err error) error {
-		var netErr net.Error
-
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			e.config.Logger.Warn("Timeout error occurred; attempting to recreate connection", "err", err)
-
-			if serr := setupBlockProvider(e.config, true); serr != nil {
-				e.config.Logger.Error("Failed to recreate connection after timeout", "err", serr)
-			}
-		}
-
-		return err
+	lastFinalizedBlock, err := e.config.BlockProvider.GetBlockByNumber(ethgo.Finalized, false)
+	if err != nil {
+		return fmt.Errorf("failed to get last finalized block: %w", err)
 	}
 
-	go common.RetryForever(ctx, time.Second, func(context.Context) error {
-		// sync up all missed blocks on start if it is not already sync up
-		if err := e.syncOnStart(); err != nil {
-			e.config.Logger.Error("Syncing up on start failed.", "err", err)
+	lastProcessedBlock, err := e.store.GetLastProcessedBlock()
+	if err != nil {
+		return fmt.Errorf("failed to get last processed block from store: %w", err)
+	}
 
-			return handleError(err)
-		}
+	lastFinalizedBlockNumber := lastFinalizedBlock.Number
 
-		// start the polling of blocks
-		err := e.blockTracker.Track(ctx, func(block *ethgo.Block) error {
-			return e.trackBlock(block)
-		})
+	if lastFinalizedBlockNumber < lastProcessedBlock {
+		// this should never happen if we are syncing the same network
+		return fmt.Errorf("last finalized block: %d is less than last processed block: %d",
+			lastFinalizedBlockNumber, lastProcessedBlock)
+	}
 
-		if common.IsContextDone(err) {
+	syncBatchSizeCorrected := e.config.SyncBatchSize
+	if syncBatchSizeCorrected == 0 {
+		// if sync batch size is 0, we will sync one block at a time
+		syncBatchSizeCorrected = 1
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			e.config.Logger.Info("Event tracker stopped")
+
 			return nil
+		default:
 		}
 
-		return handleError(err)
-	})
+		fromBlock := lastProcessedBlock + 1
+		toBlock := fromBlock + e.config.SyncBatchSize // if SyncBatchSize is 0, we get block by block, e.g. 10-10
 
-	return nil
-}
+		// if SyncBatchSize is 0, we need to use the corrected size because we can not divide by 0
+		numBatches := int(math.Ceil(float64(lastFinalizedBlockNumber-fromBlock+1) / float64(syncBatchSizeCorrected)))
 
-// trackBlock is a method in the EventTracker struct that is responsible for tracking blocks and processing their logs
-//
-// Inputs:
-// - block: An instance of the ethgo.Block struct representing a block to track.
-//
-// Returns:
-//   - nil if tracking block passes successfully.
-//   - An error if there is an error on tracking given block.
-func (e *EventTracker) trackBlock(block *ethgo.Block) error {
-	if !e.blockContainer.IsOutOfSync(block) {
-		e.blockContainer.AcquireWriteLock()
-		defer e.blockContainer.ReleaseWriteLock()
-
-		if e.blockContainer.LastCachedBlock() < block.Number {
-			// we are not out of sync, it's a sequential add of new block
-			if err := e.blockContainer.AddBlock(block); err != nil {
-				return err
+		for i := 0; i < numBatches; i++ {
+			if toBlock > lastFinalizedBlock.Number {
+				toBlock = lastFinalizedBlock.Number
 			}
+
+			if err := e.getBlockRange(fromBlock, toBlock); err != nil {
+				return fmt.Errorf("failed to get new state for batch: %w", err)
+			}
+
+			lastProcessedBlock = toBlock
+			fromBlock = toBlock + 1
+			toBlock += syncBatchSizeCorrected // if SyncBatchSize is 0, we get block by block, e.g. 10-10, so use a corrected batch size
 		}
 
-		// check if some blocks reached confirmation level so that we can process their logs
-		return e.processLogs()
+		lastFinalizedBlockNumber = e.waitForNewFinalizedBlock(ctx, lastFinalizedBlockNumber)
 	}
-
-	// we are out of sync (either we missed some blocks, or a reorg happened)
-	// so we get remove the old pending state and get the new one
-	return e.getNewState(block)
 }
 
-// syncOnStart is a method in the EventTracker struct that is responsible
-// for syncing the event tracker on startup.
-// It retrieves the latest block and checks if the event tracker is out of sync.
-// If it is out of sync, it calls the getNewState method to update the state.
-//
-// Returns:
-//   - nil if sync passes successfully, or no sync is done.
-//   - An error if there is an error retrieving blocks or logs from the external provider or saving logs to the store.
-func (e *EventTracker) syncOnStart() (err error) {
-	var latestBlock *ethgo.Block
+// waitForNewFinalizedBlock waits for a new finalized block to appear on tracked network
+func (e *EventTracker) waitForNewFinalizedBlock(ctx context.Context, lastSeenBlock uint64) uint64 {
+	ticker := time.NewTicker(e.config.PollInterval)
+	defer ticker.Stop()
 
-	e.once.Do(func() {
-		e.config.Logger.Info("Syncing up on start...")
+	for {
+		select {
+		case <-ctx.Done():
+			e.config.Logger.Info("WaitForNewFinalizedBlock - context cancelled")
 
-		latestBlock, err = e.config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
-		if err != nil {
-			return
-		}
-
-		if !e.blockContainer.IsOutOfSync(latestBlock) {
-			e.config.Logger.Info("Everything synced up on start")
-
-			return
-		}
-
-		err = e.getNewState(latestBlock)
-	})
-
-	return err
-}
-
-// getNewState is called if tracker is out of sync (it missed some blocks),
-// or a reorg happened in the tracked chain.
-// It acquires write lock on the block container, so that the state is not changed while it
-// retrieves the new blocks (new state).
-// It will clean the previously cached state (non confirmed blocks), get the new state,
-// set it on the block container and process logs on the confirmed blocks on the new state
-//
-// Input:
-//   - latestBlock - latest block on the tracked chain
-//
-// Returns:
-//   - nil if there are no confirmed blocks.
-//   - An error if there is an error retrieving blocks or logs from the external provider or saving logs to the store.
-func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
-	lastProcessedBlock := e.blockContainer.LastProcessedBlock()
-
-	e.config.Logger.Info("Getting new state, since some blocks were missed",
-		"lastProcessedBlock", lastProcessedBlock, "latestBlockFromRpc", latestBlock.Number)
-
-	e.blockContainer.AcquireWriteLock()
-	defer e.blockContainer.ReleaseWriteLock()
-
-	// if latest block already in memory -> exit
-	if e.blockContainer.BlockExists(latestBlock) {
-		return nil
-	}
-
-	startBlock := lastProcessedBlock + 1
-
-	// sanitize startBlock from which we will start polling for blocks
-	if e.config.NumOfBlocksToReconcile > 0 &&
-		latestBlock.Number > e.config.NumOfBlocksToReconcile &&
-		latestBlock.Number-e.config.NumOfBlocksToReconcile > lastProcessedBlock {
-		startBlock = latestBlock.Number - e.config.NumOfBlocksToReconcile
-	}
-
-	// it is not optimal to start from the latest block if there are too many blocks for syncing
-	if latestBlock.Number-startBlock+1 > max(e.config.NumBlockConfirmations, maxBlockGapForLatestSync) {
-		return e.getNewStateFromFirst(startBlock, latestBlock)
-	}
-
-	return e.getNewStateFromLatest(startBlock, latestBlock)
-}
-
-func (e *EventTracker) getNewStateFromFirst(startBlock uint64, latestBlock *ethgo.Block) error {
-	e.blockContainer.CleanState() // clean old state
-
-	// get blocks in batches
-	for i := startBlock; i < latestBlock.Number; i += e.config.SyncBatchSize {
-		end := i + e.config.SyncBatchSize - 1
-		if end > latestBlock.Number {
-			// we go until the latest block, since we don't need to
-			// query for it using an rpc point, since we already have it
-			end = latestBlock.Number - 1
-		}
-
-		e.config.Logger.Info("Getting new state for block batch", "fromBlock", i, "toBlock", end)
-
-		// get and add blocks in batch
-		for j := i; j <= end; j++ {
-			block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(j), false) //nolint:gosec
+			return lastSeenBlock
+		case <-ticker.C:
+			block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.Finalized, false)
 			if err != nil {
-				e.config.Logger.Error("Getting new state for block batch failed on rpc call",
-					"fromBlock", i,
-					"toBlock", end,
-					"currentBlock", j,
-					"err", err)
+				e.config.Logger.Error("error getting last finalized block num: ", err)
 
-				return err
+				continue
 			}
 
-			if err := e.blockContainer.AddBlock(block); err != nil {
-				return err
+			if block.Number > lastSeenBlock {
+				return block.Number
 			}
 		}
-
-		// now process logs from confirmed blocks if any
-		if err := e.processLogs(); err != nil {
-			return err
-		}
 	}
-
-	// add latest block only if reorg did not happen
-	if err := e.blockContainer.AddBlock(latestBlock); err != nil {
-		return err
-	}
-
-	// process logs if there are more confirmed events
-	if err := e.processLogs(); err != nil {
-		e.config.Logger.Error("Getting new state failed",
-			"latestBlockFromRpc", latestBlock.Number,
-			"err", err)
-
-		return err
-	}
-
-	e.config.Logger.Info("Getting new state finished",
-		"newLastProcessedBlock", e.blockContainer.LastProcessedBlockLocked(),
-		"latestBlockFromRpc", latestBlock.Number)
-
-	return nil
 }
 
-func (e *EventTracker) getNewStateFromLatest(startBlock uint64, latestBlock *ethgo.Block) error {
-	blocksToAdd := []*ethgo.Block{latestBlock}
-
-	for blockNum := latestBlock.Number - 1; blockNum >= startBlock; blockNum-- {
-		block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(blockNum), false) //nolint:gosec
-		if err != nil {
-			e.config.Logger.Error("Getting block failed", "blockNum", blockNum, "err", err)
-
-			return err
-		}
-
-		if e.blockContainer.BlockExists(block) {
-			break
-		}
-
-		if blocksToAdd[len(blocksToAdd)-1].ParentHash != block.Hash {
-			return fmt.Errorf("reorg happened during retrieving new state: block = %d", blockNum)
-		}
-
-		blocksToAdd = append(blocksToAdd, block)
-	}
-
-	slices.Reverse(blocksToAdd)
-	// remove all blocks from memory that are not part of the current canonical chain
-	e.blockContainer.RemoveAllAfterParentOf(blocksToAdd[0])
-	// math.ceil(x/y) == (x+y-1)/x
-	batchesCnt := (uint64(len(blocksToAdd)) + e.config.SyncBatchSize - 1) / e.config.SyncBatchSize
-	offset := uint64(0)
-
-	for i := uint64(0); i < batchesCnt; i++ {
-		nextOffset := min(offset+e.config.SyncBatchSize, uint64(len(blocksToAdd)))
-
-		for j := offset; j < nextOffset; j++ {
-			if err := e.blockContainer.AddBlock(blocksToAdd[j]); err != nil {
-				return err
-			}
-		}
-
-		// process logs if there are more confirmed events
-		if err := e.processLogs(); err != nil {
-			e.config.Logger.Error("Getting new state failed",
-				"latestBlockFromRpc", blocksToAdd[len(blocksToAdd)-1].Number,
-				"err", err)
-
-			return err
-		}
-
-		offset = nextOffset
-	}
-
-	e.config.Logger.Info("Getting new state finished",
-		"newLastProcessedBlock", e.blockContainer.LastProcessedBlockLocked(),
-		"latestBlockFromRpc", latestBlock.Number)
-
-	return nil
-}
-
-// ProcessLogs retrieves logs for confirmed blocks, filters them based on certain criteria,
-// passes them to the subscriber, and stores them in a store.
-// It also removes the processed blocks from the block container.
-//
-// Returns:
-// - nil if there are no confirmed blocks.
-// - An error if there is an error retrieving logs from the external provider or saving logs to the store.
-func (e *EventTracker) processLogs() error {
-	confirmedBlocks := e.blockContainer.GetConfirmedBlocks(e.config.NumBlockConfirmations)
-	if confirmedBlocks == nil {
-		// no confirmed blocks, so nothing to process
-		e.config.Logger.Debug("No confirmed blocks. Nothing to process")
-
-		return nil
-	}
-
-	fromBlock := confirmedBlocks[0]
-	toBlock := confirmedBlocks[len(confirmedBlocks)-1]
-
-	e.config.Logger.Debug("Processing logs for blocks", "fromBlock", fromBlock, "toBlock", toBlock)
-
+// getBlockRange is a method of the EventTracker struct that retrieves logs from the specified block range
+func (e *EventTracker) getBlockRange(fromBlock, toBlock uint64) error {
 	logs, err := e.config.BlockProvider.GetLogs(e.getLogsQuery(fromBlock, toBlock))
 	if err != nil {
-		e.config.Logger.Error("Process logs failed on getting logs from rpc",
+		e.config.Logger.Error("getting block range failed",
 			"fromBlock", fromBlock,
 			"toBlock", toBlock,
 			"err", err)
@@ -575,16 +345,32 @@ func (e *EventTracker) processLogs() error {
 		return err
 	}
 
-	if err := e.blockContainer.RemoveBlocks(fromBlock, toBlock); err != nil {
-		return fmt.Errorf("could not remove processed blocks. Err: %w", err)
-	}
-
-	e.config.Logger.Debug("Processing logs for blocks finished",
+	e.config.Logger.Debug("getting block range finished",
 		"fromBlock", fromBlock,
 		"toBlock", toBlock,
 		"numOfLogs", len(filteredLogs))
 
 	return nil
+}
+
+// Close closes the EventTracker by closing the closeCh channel.
+// This method is used to signal the goroutines to stop.
+//
+// Example Usage:
+//
+//	tracker := NewEventTracker(config)
+//	tracker.Start()
+//	defer tracker.Close()
+//
+// Inputs: None
+//
+// Flow:
+//  1. The Close() method is called on an instance of EventTracker.
+//  2. The closeCh channel is closed, which signals the goroutines to stop.
+//
+// Outputs: None
+func (e *EventTracker) Close() {
+	close(e.closeCh)
 }
 
 // getLogsQuery is a method of the EventTracker struct that creates and returns
