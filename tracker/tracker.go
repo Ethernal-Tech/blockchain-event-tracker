@@ -273,6 +273,8 @@ func (e *EventTracker) Start() error {
 		})
 
 		if common.IsContextDone(err) {
+			e.config.Logger.Info("Event tracker stopped", "lastProcessedBlock", e.blockContainer.LastProcessedBlock())
+
 			return nil
 		}
 
