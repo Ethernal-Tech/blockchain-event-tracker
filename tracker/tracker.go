@@ -295,6 +295,13 @@ func (e *EventTracker) trackBlock(block *ethgo.Block) error {
 		e.blockContainer.AcquireWriteLock()
 		defer e.blockContainer.ReleaseWriteLock()
 
+		if latestBlock := e.blockContainer.LastProcessedBlockLocked(); block.Number <= latestBlock {
+			e.config.Logger.Debug("Block is already processed or in the future",
+				"lastProcessedBlock", latestBlock, "latestBlockFromRpc", block.Number)
+
+			return nil // no need to get new state, since we are already up to date or in the future
+		}
+
 		if e.blockContainer.LastCachedBlock() < block.Number {
 			// we are not out of sync, it's a sequential add of new block
 			if err := e.blockContainer.AddBlock(block); err != nil {
@@ -356,13 +363,17 @@ func (e *EventTracker) syncOnStart() (err error) {
 //   - nil if there are no confirmed blocks.
 //   - An error if there is an error retrieving blocks or logs from the external provider or saving logs to the store.
 func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
-	lastProcessedBlock := e.blockContainer.LastProcessedBlock()
+	e.blockContainer.AcquireWriteLock()
+	defer e.blockContainer.ReleaseWriteLock()
+
+	lastProcessedBlock := e.blockContainer.LastProcessedBlockLocked()
 
 	e.config.Logger.Info("Getting new state, since some blocks were missed",
 		"lastProcessedBlock", lastProcessedBlock, "latestBlockFromRpc", latestBlock.Number)
 
-	e.blockContainer.AcquireWriteLock()
-	defer e.blockContainer.ReleaseWriteLock()
+	if latestBlock.Number <= lastProcessedBlock {
+		return nil // no need to get new state, since we are already up to date or in the future
+	}
 
 	// if latest block already in memory -> exit
 	if e.blockContainer.BlockExists(latestBlock) {

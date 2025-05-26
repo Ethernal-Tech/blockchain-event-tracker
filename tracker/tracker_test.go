@@ -635,6 +635,46 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.AssertExpectations(t)
 	})
 
+	t.Run("Indexer is in the future", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			batchSize             = uint64(4)
+			numBlockConfirmations = uint64(3)
+			numOfCachedBlocks     = uint64(4)
+		)
+
+		config := createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, new(mockProvider))
+
+		tracker, err := NewEventTracker(config, store.NewTestTrackerStore(t), 1000)
+		require.NoError(t, err)
+
+		// mock getting new state
+		for i := uint64(1); i <= numOfCachedBlocks; i++ {
+			tracker.blockContainer.blocks = append(tracker.blockContainer.blocks, i)
+			tracker.blockContainer.numToHashMap[i] = ethgo.Hash{byte(i)}
+		}
+
+		for i := numOfCachedBlocks; i <= numOfCachedBlocks+2; i++ {
+			lastProcessedBlock := numOfCachedBlocks + 1 // on last iteration we test getNewState
+			if i == numOfCachedBlocks+2 {
+				lastProcessedBlock = i
+			}
+
+			tracker.blockContainer.lastProcessedConfirmedBlock = lastProcessedBlock
+
+			err = tracker.trackBlock(&ethgo.Block{
+				Number:     i,
+				Hash:       ethgo.Hash{byte(i)},
+				ParentHash: ethgo.Hash{byte(i - 1)},
+			})
+
+			require.NoError(t, err)
+			require.Equal(t, lastProcessedBlock, tracker.blockContainer.LastProcessedBlock())
+			require.Equal(t, numOfCachedBlocks, tracker.blockContainer.LastCachedBlock())
+		}
+	})
+
 	t.Run("Create a tracker - invalid/default store", func(t *testing.T) {
 		t.Parallel()
 
