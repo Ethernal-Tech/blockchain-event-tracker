@@ -91,8 +91,9 @@ var defaultStore = "./eventStore.db"
 type EventTracker struct {
 	config *EventTrackerConfig
 
-	closeCh chan struct{}
-	once    sync.Once
+	closeCh         chan struct{}
+	finishClosingCh chan struct{} // channel to signal that the tracker is finished closing
+	once            sync.Once
 
 	blockTracker   blocktracker.BlockTrackerInterface
 	blockContainer *TrackerBlockContainer
@@ -192,12 +193,13 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 	}
 
 	return &EventTracker{
-		config:         config,
-		store:          store,
-		closeCh:        make(chan struct{}),
-		blockTracker:   blocktracker.NewJSONBlockTracker(config.BlockProvider),
-		blockContainer: NewTrackerBlockContainer(lastProcessedBlock),
-		chainID:        chainID,
+		config:          config,
+		store:           store,
+		finishClosingCh: make(chan struct{}),
+		closeCh:         make(chan struct{}),
+		blockTracker:    blocktracker.NewJSONBlockTracker(config.BlockProvider),
+		blockContainer:  NewTrackerBlockContainer(lastProcessedBlock),
+		chainID:         chainID,
 	}, nil
 }
 
@@ -219,6 +221,10 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 // Outputs: None
 func (e *EventTracker) Close() {
 	close(e.closeCh)
+}
+
+func (e *EventTracker) GetFinishClosingCh() <-chan struct{} {
+	return e.finishClosingCh
 }
 
 // Start is a method in the EventTracker struct that starts the tracking of blocks
@@ -259,27 +265,33 @@ func (e *EventTracker) Start() error {
 		return err
 	}
 
-	go common.RetryForever(ctx, time.Second, func(context.Context) error {
-		// sync up all missed blocks on start if it is not already sync up
-		if err := e.syncOnStart(); err != nil {
-			e.config.Logger.Error("Syncing up on start failed.", "err", err)
-
-			return handleError(err)
-		}
-
-		// start the polling of blocks
-		err := e.blockTracker.Track(ctx, func(block *ethgo.Block) error {
-			return e.trackBlock(block)
-		})
-
-		if common.IsContextDone(err) {
+	go func() {
+		defer func() {
 			e.config.Logger.Info("Event tracker stopped", "lastProcessedBlock", e.blockContainer.LastProcessedBlock())
 
-			return nil
-		}
+			close(e.finishClosingCh)
+		}()
 
-		return handleError(err)
-	})
+		common.RetryForever(ctx, time.Second, func(context.Context) error {
+			// sync up all missed blocks on start if it is not already sync up
+			if err := e.syncOnStart(); err != nil {
+				e.config.Logger.Error("Syncing up on start failed.", "err", err)
+
+				return handleError(err)
+			}
+
+			// start the polling of blocks
+			err := e.blockTracker.Track(ctx, func(block *ethgo.Block) error {
+				return e.trackBlock(block)
+			})
+
+			if common.IsContextDone(err) {
+				return nil
+			}
+
+			return handleError(err)
+		})
+	}()
 
 	return nil
 }
