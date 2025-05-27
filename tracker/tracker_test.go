@@ -105,7 +105,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 	t.Run("Add block by block - no confirmed blocks", func(t *testing.T) {
 		t.Parallel()
 
-		tracker, err := NewEventTracker(createTestTrackerConfig(t, 10, 10, 0, nil), store.NewTestTrackerStore(t), 0)
+		tracker, err := NewEventTracker(createTestTrackerConfig(t, 10, 10, 0, nil), store.NewTestTrackerStore(t))
 
 		require.NoError(t, err)
 
@@ -148,7 +148,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 
 		// create a tracker with invalid subscriber
 		_, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.Error(t, err)
 		require.ErrorContains(t, err, "invalid configuration, event subscriber not set")
 	})
@@ -165,7 +165,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.On("GetLogs", mock.Anything).Return([]*ethgo.Log{}, nil).Once()
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, 10, 0, blockProviderMock),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 
 		// add some blocks
@@ -230,7 +230,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.On("GetLogs", mock.Anything).Return(logs, nil).Once()
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, 10, 0, blockProviderMock),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 
 		// add some blocks
@@ -302,7 +302,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 
 		// create a tracker with invalid subscriber
 		_, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.Error(t, err)
 		require.ErrorContains(t, err, "invalid configuration, event subscriber not set")
 	})
@@ -318,7 +318,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.On("GetLogs", mock.Anything).Return(nil, errors.New("some error occurred")).Once()
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, 10, 0, blockProviderMock),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 
 		// add some blocks
@@ -387,7 +387,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(int(numOfMissedBlocks))
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, blockProviderMock),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 
 		// mock getting missed blocks
@@ -476,7 +476,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			int(numOfMissedBlocks + numOfCachedBlocks))
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, blockProviderMock),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 
 		var block *ethgo.Block
@@ -571,7 +571,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(int(numOfCachedBlocks))
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, blockProviderMock),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 
 		var block *ethgo.Block
@@ -646,8 +646,9 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		)
 
 		config := createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, new(mockProvider))
+		config.StartBlockFromGenesis = 1000
 
-		tracker, err := NewEventTracker(config, store.NewTestTrackerStore(t), 1000)
+		tracker, err := NewEventTracker(config, store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 
 		// mock getting new state
@@ -682,7 +683,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		batchSize := uint64(4)
 		numBlockConfirmations := uint64(3)
 
-		_, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, nil), nil, 0)
+		_, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, nil), nil)
 		require.NoError(t, err)
 
 		// Remove default.db file created during test
@@ -694,7 +695,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 	t.Run("Create a tracker with invalid config", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := NewEventTracker(nil, nil, 0)
+		_, err := NewEventTracker(nil, nil)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "invalid configuration")
 	})
@@ -708,7 +709,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		config := createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, nil)
 		config.Logger = nil
 
-		_, err := NewEventTracker(config, store.NewTestTrackerStore(t), 0)
+		_, err := NewEventTracker(config, store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 	})
 }

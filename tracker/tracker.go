@@ -72,6 +72,9 @@ type EventTrackerConfig struct {
 	// LogFilter defines which events are tracked and from which contracts on the tracked chain
 	LogFilter map[ethgo.Address][]ethgo.Hash `json:"logFilter"`
 
+	// StartBlockFromConfig defines the block from which the tracker will start tracking events.
+	StartBlockFromGenesis uint64 `json:"startBlockFromGenesis"`
+
 	// Logger is the logger instance for event tracker
 	Logger hcf.Logger `json:"-"`
 
@@ -126,12 +129,10 @@ type EventTracker struct {
 // Inputs:
 //   - config (TrackerConfig): configuration of EventTracker.
 //   - store: implementation of EventTrackerStore interface
-//   - startBlockFromGenesis: block from which to start syncing
 //
 // Outputs:
 //   - A new instance of the EventTracker struct.
-func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerStore,
-	startBlockFromGenesis uint64) (*EventTracker, error) {
+func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerStore) (*EventTracker, error) {
 	if config == nil {
 		return nil, fmt.Errorf("invalid configuration. Failed to init Event Tracker")
 	}
@@ -169,11 +170,9 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		return nil, err
 	}
 
-	if lastProcessedBlock < startBlockFromGenesis {
-		// if we don't have last processed block, or it is less than startBlockFromGenesis,
-		// we will start from startBlockFromGenesis
-		lastProcessedBlock = startBlockFromGenesis
-	}
+	// if we don't have last processed block, or it is less than startBlockFromGenesis,
+	// we will start from startBlockFromGenesis
+	lastProcessedBlock = max(lastProcessedBlock, config.StartBlockFromGenesis)
 
 	if config.NumOfBlocksToReconcile > 0 {
 		latestBlock, err := config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
