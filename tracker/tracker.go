@@ -274,15 +274,21 @@ func (e *EventTracker) Start() error {
 
 		common.RetryForever(ctx, time.Second, func(context.Context) error {
 			// sync up all missed blocks on start if it is not already sync up
-			if err := e.syncOnStart(); err != nil {
+			err := e.syncOnStart(ctx)
+
+			if common.IsContextDone(err) {
+				return nil
+			}
+
+			if err != nil {
 				e.config.Logger.Error("Syncing up on start failed.", "err", err)
 
 				return handleError(err)
 			}
 
 			// start the polling of blocks
-			err := e.blockTracker.Track(ctx, func(block *ethgo.Block) error {
-				return e.trackBlock(block)
+			err = e.blockTracker.Track(ctx, func(block *ethgo.Block) error {
+				return e.trackBlock(ctx, block)
 			})
 
 			if common.IsContextDone(err) {
@@ -300,11 +306,12 @@ func (e *EventTracker) Start() error {
 //
 // Inputs:
 // - block: An instance of the ethgo.Block struct representing a block to track.
+// - ctx: A context.Context instance to manage cancellation and timeouts.
 //
 // Returns:
 //   - nil if tracking block passes successfully.
 //   - An error if there is an error on tracking given block.
-func (e *EventTracker) trackBlock(block *ethgo.Block) error {
+func (e *EventTracker) trackBlock(ctx context.Context, block *ethgo.Block) error {
 	if !e.blockContainer.IsOutOfSync(block) {
 		e.blockContainer.AcquireWriteLock()
 		defer e.blockContainer.ReleaseWriteLock()
@@ -329,7 +336,7 @@ func (e *EventTracker) trackBlock(block *ethgo.Block) error {
 
 	// we are out of sync (either we missed some blocks, or a reorg happened)
 	// so we get remove the old pending state and get the new one
-	return e.getNewState(block)
+	return e.getNewState(ctx, block)
 }
 
 // syncOnStart is a method in the EventTracker struct that is responsible
@@ -337,10 +344,13 @@ func (e *EventTracker) trackBlock(block *ethgo.Block) error {
 // It retrieves the latest block and checks if the event tracker is out of sync.
 // If it is out of sync, it calls the getNewState method to update the state.
 //
+// Input:
+//   - ctx - context to cancel the operation if needed
+//
 // Returns:
 //   - nil if sync passes successfully, or no sync is done.
 //   - An error if there is an error retrieving blocks or logs from the external provider or saving logs to the store.
-func (e *EventTracker) syncOnStart() (err error) {
+func (e *EventTracker) syncOnStart(ctx context.Context) (err error) {
 	var latestBlock *ethgo.Block
 
 	e.once.Do(func() {
@@ -357,7 +367,7 @@ func (e *EventTracker) syncOnStart() (err error) {
 			return
 		}
 
-		err = e.getNewState(latestBlock)
+		err = e.getNewState(ctx, latestBlock)
 	})
 
 	return err
@@ -372,11 +382,12 @@ func (e *EventTracker) syncOnStart() (err error) {
 //
 // Input:
 //   - latestBlock - latest block on the tracked chain
+//   - ctx - context to cancel the operation if needed
 //
 // Returns:
 //   - nil if there are no confirmed blocks.
 //   - An error if there is an error retrieving blocks or logs from the external provider or saving logs to the store.
-func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
+func (e *EventTracker) getNewState(ctx context.Context, latestBlock *ethgo.Block) error {
 	e.blockContainer.AcquireWriteLock()
 	defer e.blockContainer.ReleaseWriteLock()
 
@@ -405,13 +416,15 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 
 	// it is not optimal to start from the latest block if there are too many blocks for syncing
 	if latestBlock.Number-startBlock+1 > max(e.config.NumBlockConfirmations, maxBlockGapForLatestSync) {
-		return e.getNewStateFromFirst(startBlock, latestBlock)
+		return e.getNewStateFromFirst(ctx, startBlock, latestBlock)
 	}
 
-	return e.getNewStateFromLatest(startBlock, latestBlock)
+	return e.getNewStateFromLatest(ctx, startBlock, latestBlock)
 }
 
-func (e *EventTracker) getNewStateFromFirst(startBlock uint64, latestBlock *ethgo.Block) error {
+func (e *EventTracker) getNewStateFromFirst(
+	ctx context.Context, startBlock uint64, latestBlock *ethgo.Block,
+) error {
 	e.blockContainer.CleanState() // clean old state
 
 	// get blocks in batches
@@ -447,6 +460,13 @@ func (e *EventTracker) getNewStateFromFirst(startBlock uint64, latestBlock *ethg
 		if err := e.processLogs(); err != nil {
 			return err
 		}
+
+		// check if context is done before starting to get blocks
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 	}
 
 	// add latest block only if reorg did not happen
@@ -470,7 +490,9 @@ func (e *EventTracker) getNewStateFromFirst(startBlock uint64, latestBlock *ethg
 	return nil
 }
 
-func (e *EventTracker) getNewStateFromLatest(startBlock uint64, latestBlock *ethgo.Block) error {
+func (e *EventTracker) getNewStateFromLatest(
+	ctx context.Context, startBlock uint64, latestBlock *ethgo.Block,
+) error {
 	blocksToAdd := []*ethgo.Block{latestBlock}
 
 	for blockNum := latestBlock.Number - 1; blockNum >= startBlock; blockNum-- {
@@ -490,6 +512,13 @@ func (e *EventTracker) getNewStateFromLatest(startBlock uint64, latestBlock *eth
 		}
 
 		blocksToAdd = append(blocksToAdd, block)
+
+		// check if context is done before starting to get blocks
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 	}
 
 	slices.Reverse(blocksToAdd)
@@ -518,6 +547,13 @@ func (e *EventTracker) getNewStateFromLatest(startBlock uint64, latestBlock *eth
 		}
 
 		offset = nextOffset
+
+		// check if context is done before starting to get blocks
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 	}
 
 	e.config.Logger.Info("Getting new state finished",

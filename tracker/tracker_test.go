@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"context"
 	"errors"
 	"math/big"
 	"os"
@@ -110,7 +111,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 
 		// add some blocks, but don't go to confirmation level
 		for i := uint64(1); i <= tracker.config.NumBlockConfirmations; i++ {
-			require.NoError(t, tracker.trackBlock(
+			require.NoError(t, tracker.trackBlock(context.Background(),
 				&ethgo.Block{
 					Number:     i,
 					Hash:       ethgo.Hash{byte(i)},
@@ -188,7 +189,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			Hash:       ethgo.Hash{byte(block.Number + 1)},
 			ParentHash: block.Hash,
 		}
-		require.NoError(t, tracker.trackBlock(latestBlock))
+		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
 
 		// check if the last cached block is as expected
 		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
@@ -253,7 +254,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			Hash:       ethgo.Hash{byte(block.Number + 1)},
 			ParentHash: block.Hash,
 		}
-		require.NoError(t, tracker.trackBlock(latestBlock))
+		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
 
 		// check if the last cached block is as expected
 		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
@@ -341,7 +342,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			Hash:       ethgo.Hash{byte(block.Number + 1)},
 			ParentHash: block.Hash,
 		}
-		require.ErrorContains(t, tracker.trackBlock(latestBlock), "some error occurred")
+		require.ErrorContains(t, tracker.trackBlock(context.Background(), latestBlock), "some error occurred")
 
 		// check if the last cached block is as expected
 		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
@@ -410,7 +411,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			Hash:       ethgo.Hash{byte(block.Number + 1)},
 			ParentHash: block.Hash,
 		}
-		require.NoError(t, tracker.trackBlock(latestBlock))
+		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
 
 		// check if the last cached block is as expected
 		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
@@ -512,7 +513,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			Hash:       ethgo.Hash{byte(block.Number + 1)},
 			ParentHash: block.Hash,
 		}
-		require.NoError(t, tracker.trackBlock(latestBlock))
+		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
 
 		// check if the last cached block is as expected
 		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
@@ -605,7 +606,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			Hash:       ethgo.Hash{byte(block.Number + 1)},
 			ParentHash: block.Hash,
 		}
-		require.NoError(t, tracker.trackBlock(latestBlock))
+		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
 
 		// check if the last cached block is as expected
 		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
@@ -663,7 +664,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 
 			tracker.blockContainer.lastProcessedConfirmedBlock = lastProcessedBlock
 
-			err = tracker.trackBlock(&ethgo.Block{
+			err = tracker.trackBlock(context.Background(), &ethgo.Block{
 				Number:     i,
 				Hash:       ethgo.Hash{byte(i)},
 				ParentHash: ethgo.Hash{byte(i - 1)},

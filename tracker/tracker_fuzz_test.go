@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -84,6 +85,6 @@ func FuzzGetNewState(f *testing.F) {
 			store:          store.NewTestTrackerStore(t),
 		}
 
-		require.NoError(t, eventTracker.getNewState(&ethgo.Block{Number: data.Number}))
+		require.NoError(t, eventTracker.getNewState(context.Background(), &ethgo.Block{Number: data.Number}))
 	})
 }
