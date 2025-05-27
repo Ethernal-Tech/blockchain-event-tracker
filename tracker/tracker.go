@@ -207,11 +207,7 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 //
 // Inputs:
 // - ctx: A context.Context instance to manage cancellation and timeouts.
-//
-// Returns:
-//   - nil if start passes successfully.
-//   - An error if there is an error on startup of blocks tracking on tracked chain.
-func (e *EventTracker) Start(ctx context.Context) error {
+func (e *EventTracker) Start(ctx context.Context) {
 	handleError := func(err error, msg string) error {
 		e.config.Logger.Error(msg, "err", err)
 
@@ -237,6 +233,10 @@ func (e *EventTracker) Start(ctx context.Context) error {
 		"logFilter", e.config.LogFilter,
 	)
 
+	defer func() {
+		e.config.Logger.Info("Event tracker stoped", "lastProcessedBlock", e.blockContainer.LastProcessedBlock())
+	}()
+
 	common.RetryForever(ctx, time.Second, func(context.Context) error {
 		// sync up all missed blocks on start if it is not already sync up
 		err := e.syncOnStart(ctx)
@@ -251,10 +251,6 @@ func (e *EventTracker) Start(ctx context.Context) error {
 
 		return handleError(err, "Tracking blocks failed.")
 	})
-
-	e.config.Logger.Info("Event tracker stoped", "lastProcessedBlock", e.blockContainer.LastProcessedBlock())
-
-	return nil
 }
 
 // trackBlock is a method in the EventTracker struct that is responsible for tracking blocks and processing their logs
@@ -271,9 +267,9 @@ func (e *EventTracker) trackBlock(ctx context.Context, block *ethgo.Block) error
 		e.blockContainer.AcquireWriteLock()
 		defer e.blockContainer.ReleaseWriteLock()
 
-		if latestBlock := e.blockContainer.LastProcessedBlockLocked(); block.Number <= latestBlock {
+		if e.blockContainer.IsBlockFromThePastLocked(block) {
 			e.config.Logger.Debug("Block is already processed or in the future",
-				"lastProcessedBlock", latestBlock, "latestBlockFromRpc", block.Number)
+				"lastProcessedBlock", e.blockContainer.LastProcessedBlockLocked(), "latestBlockFromRpc", block.Number)
 
 			return nil // no need to get new state, since we are already up to date or in the future
 		}
@@ -351,7 +347,7 @@ func (e *EventTracker) getNewState(ctx context.Context, latestBlock *ethgo.Block
 	e.config.Logger.Info("Getting new state, since some blocks were missed",
 		"lastProcessedBlock", lastProcessedBlock, "latestBlockFromRpc", latestBlock.Number)
 
-	if latestBlock.Number <= lastProcessedBlock {
+	if e.blockContainer.IsBlockFromThePastLocked(latestBlock) {
 		return nil // no need to get new state, since we are already up to date or in the future
 	}
 
@@ -416,11 +412,8 @@ func (e *EventTracker) getNewStateFromFirst(
 			return err
 		}
 
-		// check if context is done before starting to get blocks
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+		if err := checkIfContextDone(ctx); err != nil {
+			return err
 		}
 	}
 
@@ -468,11 +461,8 @@ func (e *EventTracker) getNewStateFromLatest(
 
 		blocksToAdd = append(blocksToAdd, block)
 
-		// check if context is done before starting to get blocks
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+		if err := checkIfContextDone(ctx); err != nil {
+			return err
 		}
 	}
 
@@ -503,11 +493,8 @@ func (e *EventTracker) getNewStateFromLatest(
 
 		offset = nextOffset
 
-		// check if context is done before starting to get blocks
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+		if err := checkIfContextDone(ctx); err != nil {
+			return err
 		}
 	}
 
@@ -655,4 +642,14 @@ func setupBlockProvider(config *EventTrackerConfig, force bool) error {
 	config.BlockProvider = clt.Eth()
 
 	return nil
+}
+
+func checkIfContextDone(ctx context.Context) error {
+	// check if context is done before starting to get blocks
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
 }

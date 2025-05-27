@@ -220,6 +220,19 @@ func (t *TrackerBlockContainer) IsOutOfSync(block *ethgo.Block) bool {
 	return block.Number > t.LastCachedBlock() && (!parentExists || parentHash != block.ParentHash)
 }
 
+// IsBlockFromThePastLocked checks if a block is from the past,
+// meaning it has a number less or equal than the last processed confirmed block.
+//
+// Inputs:
+// - block (ethgo.Block): The latest block of the tracked chain.
+//
+// Outputs:
+// - bool: A boolean value indicating that the tracker last processed confirmed block
+// is more recent than the given block.
+func (t *TrackerBlockContainer) IsBlockFromThePastLocked(block *ethgo.Block) bool {
+	return block.Number <= t.LastProcessedBlockLocked()
+}
+
 // GetConfirmedBlocks returns a slice of uint64 representing the block numbers of confirmed blocks.
 //
 // Example Usage:
