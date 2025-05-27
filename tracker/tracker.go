@@ -380,6 +380,10 @@ func (e *EventTracker) getNewStateFromFirst(
 
 	// get blocks in batches
 	for i := startBlock; i < latestBlock.Number; i += e.config.SyncBatchSize {
+		if err := checkIfContextDone(ctx); err != nil {
+			return err
+		}
+
 		end := i + e.config.SyncBatchSize - 1
 		if end > latestBlock.Number {
 			// we go until the latest block, since we don't need to
@@ -411,10 +415,6 @@ func (e *EventTracker) getNewStateFromFirst(
 		if err := e.processLogs(); err != nil {
 			return err
 		}
-
-		if err := checkIfContextDone(ctx); err != nil {
-			return err
-		}
 	}
 
 	// add latest block only if reorg did not happen
@@ -444,6 +444,10 @@ func (e *EventTracker) getNewStateFromLatest(
 	blocksToAdd := []*ethgo.Block{latestBlock}
 
 	for blockNum := latestBlock.Number - 1; blockNum >= startBlock; blockNum-- {
+		if err := checkIfContextDone(ctx); err != nil {
+			return err
+		}
+
 		block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(blockNum), false) //nolint:gosec
 		if err != nil {
 			e.config.Logger.Error("Getting block failed", "blockNum", blockNum, "err", err)
@@ -460,10 +464,6 @@ func (e *EventTracker) getNewStateFromLatest(
 		}
 
 		blocksToAdd = append(blocksToAdd, block)
-
-		if err := checkIfContextDone(ctx); err != nil {
-			return err
-		}
 	}
 
 	slices.Reverse(blocksToAdd)
@@ -474,6 +474,10 @@ func (e *EventTracker) getNewStateFromLatest(
 	offset := uint64(0)
 
 	for i := uint64(0); i < batchesCnt; i++ {
+		if err := checkIfContextDone(ctx); err != nil {
+			return err
+		}
+
 		nextOffset := min(offset+e.config.SyncBatchSize, uint64(len(blocksToAdd)))
 
 		for j := offset; j < nextOffset; j++ {
@@ -492,10 +496,6 @@ func (e *EventTracker) getNewStateFromLatest(
 		}
 
 		offset = nextOffset
-
-		if err := checkIfContextDone(ctx); err != nil {
-			return err
-		}
 	}
 
 	e.config.Logger.Info("Getting new state finished",
