@@ -644,8 +644,9 @@ func setupBlockProvider(config *EventTrackerConfig, force bool) error {
 	return nil
 }
 
+// checkIfContextDone checks if the context is done and returns an error if it is.
+// does not block, just checks if the context is done or not.
 func checkIfContextDone(ctx context.Context) error {
-	// check if context is done before starting to get blocks
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
