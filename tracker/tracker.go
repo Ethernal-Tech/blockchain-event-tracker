@@ -395,6 +395,10 @@ func (e *EventTracker) getNewStateFromFirst(
 
 		// get and add blocks in batch
 		for j := i; j <= end; j++ {
+			if err := checkIfContextDone(ctx); err != nil {
+				return err
+			}
+
 			block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(j), false) //nolint:gosec
 			if err != nil {
 				e.config.Logger.Error("Getting new state for block batch failed on rpc call",
