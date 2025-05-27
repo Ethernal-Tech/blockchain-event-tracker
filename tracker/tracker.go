@@ -91,9 +91,7 @@ var defaultStore = "./eventStore.db"
 type EventTracker struct {
 	config *EventTrackerConfig
 
-	closeCh         chan struct{}
-	finishClosingCh chan struct{} // channel to signal that the tracker is finished closing
-	once            sync.Once
+	once sync.Once
 
 	blockTracker   blocktracker.BlockTrackerInterface
 	blockContainer *TrackerBlockContainer
@@ -193,65 +191,30 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 	}
 
 	return &EventTracker{
-		config:          config,
-		store:           store,
-		finishClosingCh: make(chan struct{}),
-		closeCh:         make(chan struct{}),
-		blockTracker:    blocktracker.NewJSONBlockTracker(config.BlockProvider),
-		blockContainer:  NewTrackerBlockContainer(lastProcessedBlock),
-		chainID:         chainID,
+		config:         config,
+		store:          store,
+		blockTracker:   blocktracker.NewJSONBlockTracker(config.BlockProvider),
+		blockContainer: NewTrackerBlockContainer(lastProcessedBlock),
+		chainID:        chainID,
 	}, nil
-}
-
-// Close closes the EventTracker by closing the closeCh channel.
-// This method is used to signal the goroutines to stop.
-//
-// Example Usage:
-//
-//	tracker := NewEventTracker(config)
-//	tracker.Start()
-//	defer tracker.Close()
-//
-// Inputs: None
-//
-// Flow:
-//  1. The Close() method is called on an instance of EventTracker.
-//  2. The closeCh channel is closed, which signals the goroutines to stop.
-//
-// Outputs: None
-func (e *EventTracker) Close() {
-	close(e.closeCh)
-}
-
-func (e *EventTracker) GetFinishClosingCh() <-chan struct{} {
-	return e.finishClosingCh
 }
 
 // Start is a method in the EventTracker struct that starts the tracking of blocks
 // and retrieval of logs from given blocks from the tracked chain.
 // If the tracker was turned off (node was down) for some time, it will sync up all the missed
 // blocks and logs from the last start (in regards to NumOfBlocksToReconcile field in config).
+// It should be called once the EventTracker is created and configured and probably from separate goroutine.
+//
+// Inputs:
+// - ctx: A context.Context instance to manage cancellation and timeouts.
 //
 // Returns:
 //   - nil if start passes successfully.
 //   - An error if there is an error on startup of blocks tracking on tracked chain.
-func (e *EventTracker) Start() error {
-	e.config.Logger.Info("Starting event tracker",
-		"jsonRpcEndpoint", e.config.RPCEndpoint,
-		"numBlockConfirmations", e.config.NumBlockConfirmations,
-		"pollInterval", e.config.PollInterval,
-		"syncBatchSize", e.config.SyncBatchSize,
-		"numOfBlocksToReconcile", e.config.NumOfBlocksToReconcile,
-		"logFilter", e.config.LogFilter,
-	)
+func (e *EventTracker) Start(ctx context.Context) error {
+	handleError := func(err error, msg string) error {
+		e.config.Logger.Error(msg, "err", err)
 
-	ctx, cancelFn := context.WithCancel(context.Background())
-	go func() {
-		<-e.closeCh
-		cancelFn()
-	}()
-
-	handleError := func(err error) error {
 		var netErr net.Error
 
 		if errors.As(err, &netErr) && netErr.Timeout() {
@@ -265,39 +228,31 @@ func (e *EventTracker) Start() error {
 		return err
 	}
 
-	go func() {
-		defer func() {
-			e.config.Logger.Info("Event tracker stopped", "lastProcessedBlock", e.blockContainer.LastProcessedBlock())
+	e.config.Logger.Info("Starting event tracker",
+		"jsonRpcEndpoint", e.config.RPCEndpoint,
+		"numBlockConfirmations", e.config.NumBlockConfirmations,
+		"pollInterval", e.config.PollInterval,
+		"syncBatchSize", e.config.SyncBatchSize,
+		"numOfBlocksToReconcile", e.config.NumOfBlocksToReconcile,
+		"logFilter", e.config.LogFilter,
+	)
 
-			close(e.finishClosingCh)
-		}()
+	common.RetryForever(ctx, time.Second, func(context.Context) error {
+		// sync up all missed blocks on start if it is not already sync up
+		err := e.syncOnStart(ctx)
+		if err != nil {
+			return handleError(err, "Syncing up on start failed.")
+		}
 
-		common.RetryForever(ctx, time.Second, func(context.Context) error {
-			// sync up all missed blocks on start if it is not already sync up
-			err := e.syncOnStart(ctx)
-
-			if common.IsContextDone(err) {
-				return nil
-			}
-
-			if err != nil {
-				e.config.Logger.Error("Syncing up on start failed.", "err", err)
-
-				return handleError(err)
-			}
-
-			// start the polling of blocks
-			err = e.blockTracker.Track(ctx, func(block *ethgo.Block) error {
-				return e.trackBlock(ctx, block)
-			})
-
-			if common.IsContextDone(err) {
-				return nil
-			}
-
-			return handleError(err)
+		// start the polling of blocks
+		err = e.blockTracker.Track(ctx, func(block *ethgo.Block) error {
+			return e.trackBlock(ctx, block)
 		})
-	}()
+
+		return handleError(err, "Tracking blocks failed.")
+	})
+
+	e.config.Logger.Info("Event tracker stoped", "lastProcessedBlock", e.blockContainer.LastProcessedBlock())
 
 	return nil
 }
