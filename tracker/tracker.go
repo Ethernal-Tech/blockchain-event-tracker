@@ -72,6 +72,9 @@ type EventTrackerConfig struct {
 	// LogFilter defines which events are tracked and from which contracts on the tracked chain
 	LogFilter map[ethgo.Address][]ethgo.Hash `json:"logFilter"`
 
+	// StartBlockFromConfig defines the block from which the tracker will start tracking events.
+	StartBlockFromGenesis uint64 `json:"startBlockFromGenesis"`
+
 	// Logger is the logger instance for event tracker
 	Logger hcf.Logger `json:"-"`
 
@@ -91,8 +94,7 @@ var defaultStore = "./eventStore.db"
 type EventTracker struct {
 	config *EventTrackerConfig
 
-	closeCh chan struct{}
-	once    sync.Once
+	once sync.Once
 
 	blockTracker   blocktracker.BlockTrackerInterface
 	blockContainer *TrackerBlockContainer
@@ -127,12 +129,10 @@ type EventTracker struct {
 // Inputs:
 //   - config (TrackerConfig): configuration of EventTracker.
 //   - store: implementation of EventTrackerStore interface
-//   - startBlockFromGenesis: block from which to start syncing
 //
 // Outputs:
 //   - A new instance of the EventTracker struct.
-func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerStore,
-	startBlockFromGenesis uint64) (*EventTracker, error) {
+func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerStore) (*EventTracker, error) {
 	if config == nil {
 		return nil, fmt.Errorf("invalid configuration. Failed to init Event Tracker")
 	}
@@ -170,11 +170,9 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		return nil, err
 	}
 
-	if lastProcessedBlock < startBlockFromGenesis {
-		// if we don't have last processed block, or it is less than startBlockFromGenesis,
-		// we will start from startBlockFromGenesis
-		lastProcessedBlock = startBlockFromGenesis
-	}
+	// if we don't have last processed block, or it is less than startBlockFromGenesis,
+	// we will start from startBlockFromGenesis
+	lastProcessedBlock = max(lastProcessedBlock, config.StartBlockFromGenesis)
 
 	if config.NumOfBlocksToReconcile > 0 {
 		latestBlock, err := config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
@@ -194,58 +192,24 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 	return &EventTracker{
 		config:         config,
 		store:          store,
-		closeCh:        make(chan struct{}),
 		blockTracker:   blocktracker.NewJSONBlockTracker(config.BlockProvider),
 		blockContainer: NewTrackerBlockContainer(lastProcessedBlock),
 		chainID:        chainID,
 	}, nil
 }
 
-// Close closes the EventTracker by closing the closeCh channel.
-// This method is used to signal the goroutines to stop.
-//
-// Example Usage:
-//
-//	tracker := NewEventTracker(config)
-//	tracker.Start()
-//	defer tracker.Close()
-//
-// Inputs: None
-//
-// Flow:
-//  1. The Close() method is called on an instance of EventTracker.
-//  2. The closeCh channel is closed, which signals the goroutines to stop.
-//
-// Outputs: None
-func (e *EventTracker) Close() {
-	close(e.closeCh)
-}
-
 // Start is a method in the EventTracker struct that starts the tracking of blocks
 // and retrieval of logs from given blocks from the tracked chain.
 // If the tracker was turned off (node was down) for some time, it will sync up all the missed
 // blocks and logs from the last start (in regards to NumOfBlocksToReconcile field in config).
+// It should be called once the EventTracker is created and configured and probably from separate goroutine.
 //
-// Returns:
-//   - nil if start passes successfully.
-//   - An error if there is an error on startup of blocks tracking on tracked chain.
-func (e *EventTracker) Start() error {
-	e.config.Logger.Info("Starting event tracker",
-		"jsonRpcEndpoint", e.config.RPCEndpoint,
-		"numBlockConfirmations", e.config.NumBlockConfirmations,
-		"pollInterval", e.config.PollInterval,
-		"syncBatchSize", e.config.SyncBatchSize,
-		"numOfBlocksToReconcile", e.config.NumOfBlocksToReconcile,
-		"logFilter", e.config.LogFilter,
-	)
+// Inputs:
+// - ctx: A context.Context instance to manage cancellation and timeouts.
+func (e *EventTracker) Start(ctx context.Context) {
+	handleError := func(err error, msg string) error {
+		e.config.Logger.Error(msg, "err", err)
 
-	ctx, cancelFn := context.WithCancel(context.Background())
-	go func() {
-		<-e.closeCh
-		cancelFn()
-	}()
-
-	handleError := func(err error) error {
 		var netErr net.Error
 
 		if errors.As(err, &netErr) && netErr.Timeout() {
@@ -259,41 +223,57 @@ func (e *EventTracker) Start() error {
 		return err
 	}
 
-	go common.RetryForever(ctx, time.Second, func(context.Context) error {
-		// sync up all missed blocks on start if it is not already sync up
-		if err := e.syncOnStart(); err != nil {
-			e.config.Logger.Error("Syncing up on start failed.", "err", err)
+	e.config.Logger.Info("Starting event tracker",
+		"jsonRpcEndpoint", e.config.RPCEndpoint,
+		"numBlockConfirmations", e.config.NumBlockConfirmations,
+		"pollInterval", e.config.PollInterval,
+		"syncBatchSize", e.config.SyncBatchSize,
+		"numOfBlocksToReconcile", e.config.NumOfBlocksToReconcile,
+		"logFilter", e.config.LogFilter,
+		"startBlockFromGenesis", e.config.StartBlockFromGenesis,
+		"lastProcessedBlock", e.blockContainer.LastProcessedBlock(),
+	)
 
-			return handleError(err)
+	defer func() {
+		e.config.Logger.Info("Event tracker stoped", "lastProcessedBlock", e.blockContainer.LastProcessedBlock())
+	}()
+
+	common.RetryForever(ctx, time.Second, func(context.Context) error {
+		// sync up all missed blocks on start if it is not already sync up
+		err := e.syncOnStart(ctx)
+		if err != nil {
+			return handleError(err, "Syncing up on start failed.")
 		}
 
 		// start the polling of blocks
-		err := e.blockTracker.Track(ctx, func(block *ethgo.Block) error {
-			return e.trackBlock(block)
+		err = e.blockTracker.Track(ctx, func(block *ethgo.Block) error {
+			return e.trackBlock(ctx, block)
 		})
 
-		if common.IsContextDone(err) {
-			return nil
-		}
-
-		return handleError(err)
+		return handleError(err, "Tracking blocks failed.")
 	})
-
-	return nil
 }
 
 // trackBlock is a method in the EventTracker struct that is responsible for tracking blocks and processing their logs
 //
 // Inputs:
 // - block: An instance of the ethgo.Block struct representing a block to track.
+// - ctx: A context.Context instance to manage cancellation and timeouts.
 //
 // Returns:
 //   - nil if tracking block passes successfully.
 //   - An error if there is an error on tracking given block.
-func (e *EventTracker) trackBlock(block *ethgo.Block) error {
+func (e *EventTracker) trackBlock(ctx context.Context, block *ethgo.Block) error {
 	if !e.blockContainer.IsOutOfSync(block) {
 		e.blockContainer.AcquireWriteLock()
 		defer e.blockContainer.ReleaseWriteLock()
+
+		if e.blockContainer.IsBlockFromThePastLocked(block) {
+			e.config.Logger.Debug("Block is already processed or in the future",
+				"lastProcessedBlock", e.blockContainer.LastProcessedBlockLocked(), "latestBlockFromRpc", block.Number)
+
+			return nil // no need to get new state, since we are already up to date or in the future
+		}
 
 		if e.blockContainer.LastCachedBlock() < block.Number {
 			// we are not out of sync, it's a sequential add of new block
@@ -308,7 +288,7 @@ func (e *EventTracker) trackBlock(block *ethgo.Block) error {
 
 	// we are out of sync (either we missed some blocks, or a reorg happened)
 	// so we get remove the old pending state and get the new one
-	return e.getNewState(block)
+	return e.getNewState(ctx, block)
 }
 
 // syncOnStart is a method in the EventTracker struct that is responsible
@@ -316,10 +296,13 @@ func (e *EventTracker) trackBlock(block *ethgo.Block) error {
 // It retrieves the latest block and checks if the event tracker is out of sync.
 // If it is out of sync, it calls the getNewState method to update the state.
 //
+// Input:
+//   - ctx - context to cancel the operation if needed
+//
 // Returns:
 //   - nil if sync passes successfully, or no sync is done.
 //   - An error if there is an error retrieving blocks or logs from the external provider or saving logs to the store.
-func (e *EventTracker) syncOnStart() (err error) {
+func (e *EventTracker) syncOnStart(ctx context.Context) (err error) {
 	var latestBlock *ethgo.Block
 
 	e.once.Do(func() {
@@ -336,7 +319,7 @@ func (e *EventTracker) syncOnStart() (err error) {
 			return
 		}
 
-		err = e.getNewState(latestBlock)
+		err = e.getNewState(ctx, latestBlock)
 	})
 
 	return err
@@ -351,18 +334,23 @@ func (e *EventTracker) syncOnStart() (err error) {
 //
 // Input:
 //   - latestBlock - latest block on the tracked chain
+//   - ctx - context to cancel the operation if needed
 //
 // Returns:
 //   - nil if there are no confirmed blocks.
 //   - An error if there is an error retrieving blocks or logs from the external provider or saving logs to the store.
-func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
-	lastProcessedBlock := e.blockContainer.LastProcessedBlock()
+func (e *EventTracker) getNewState(ctx context.Context, latestBlock *ethgo.Block) error {
+	e.blockContainer.AcquireWriteLock()
+	defer e.blockContainer.ReleaseWriteLock()
+
+	lastProcessedBlock := e.blockContainer.LastProcessedBlockLocked()
 
 	e.config.Logger.Info("Getting new state, since some blocks were missed",
 		"lastProcessedBlock", lastProcessedBlock, "latestBlockFromRpc", latestBlock.Number)
 
-	e.blockContainer.AcquireWriteLock()
-	defer e.blockContainer.ReleaseWriteLock()
+	if e.blockContainer.IsBlockFromThePastLocked(latestBlock) {
+		return nil // no need to get new state, since we are already up to date or in the future
+	}
 
 	// if latest block already in memory -> exit
 	if e.blockContainer.BlockExists(latestBlock) {
@@ -380,17 +368,23 @@ func (e *EventTracker) getNewState(latestBlock *ethgo.Block) error {
 
 	// it is not optimal to start from the latest block if there are too many blocks for syncing
 	if latestBlock.Number-startBlock+1 > max(e.config.NumBlockConfirmations, maxBlockGapForLatestSync) {
-		return e.getNewStateFromFirst(startBlock, latestBlock)
+		return e.getNewStateFromFirst(ctx, startBlock, latestBlock)
 	}
 
-	return e.getNewStateFromLatest(startBlock, latestBlock)
+	return e.getNewStateFromLatest(ctx, startBlock, latestBlock)
 }
 
-func (e *EventTracker) getNewStateFromFirst(startBlock uint64, latestBlock *ethgo.Block) error {
+func (e *EventTracker) getNewStateFromFirst(
+	ctx context.Context, startBlock uint64, latestBlock *ethgo.Block,
+) error {
 	e.blockContainer.CleanState() // clean old state
 
 	// get blocks in batches
 	for i := startBlock; i < latestBlock.Number; i += e.config.SyncBatchSize {
+		if err := checkIfContextDone(ctx); err != nil {
+			return err
+		}
+
 		end := i + e.config.SyncBatchSize - 1
 		if end > latestBlock.Number {
 			// we go until the latest block, since we don't need to
@@ -402,6 +396,10 @@ func (e *EventTracker) getNewStateFromFirst(startBlock uint64, latestBlock *ethg
 
 		// get and add blocks in batch
 		for j := i; j <= end; j++ {
+			if err := checkIfContextDone(ctx); err != nil {
+				return err
+			}
+
 			block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(j), false) //nolint:gosec
 			if err != nil {
 				e.config.Logger.Error("Getting new state for block batch failed on rpc call",
@@ -445,10 +443,16 @@ func (e *EventTracker) getNewStateFromFirst(startBlock uint64, latestBlock *ethg
 	return nil
 }
 
-func (e *EventTracker) getNewStateFromLatest(startBlock uint64, latestBlock *ethgo.Block) error {
+func (e *EventTracker) getNewStateFromLatest(
+	ctx context.Context, startBlock uint64, latestBlock *ethgo.Block,
+) error {
 	blocksToAdd := []*ethgo.Block{latestBlock}
 
 	for blockNum := latestBlock.Number - 1; blockNum >= startBlock; blockNum-- {
+		if err := checkIfContextDone(ctx); err != nil {
+			return err
+		}
+
 		block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(blockNum), false) //nolint:gosec
 		if err != nil {
 			e.config.Logger.Error("Getting block failed", "blockNum", blockNum, "err", err)
@@ -475,6 +479,10 @@ func (e *EventTracker) getNewStateFromLatest(startBlock uint64, latestBlock *eth
 	offset := uint64(0)
 
 	for i := uint64(0); i < batchesCnt; i++ {
+		if err := checkIfContextDone(ctx); err != nil {
+			return err
+		}
+
 		nextOffset := min(offset+e.config.SyncBatchSize, uint64(len(blocksToAdd)))
 
 		for j := offset; j < nextOffset; j++ {
@@ -639,4 +647,15 @@ func setupBlockProvider(config *EventTrackerConfig, force bool) error {
 	config.BlockProvider = clt.Eth()
 
 	return nil
+}
+
+// checkIfContextDone checks if the context is done and returns an error if it is.
+// does not block, just checks if the context is done or not.
+func checkIfContextDone(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
 }

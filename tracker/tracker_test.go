@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"context"
 	"errors"
 	"math/big"
 	"os"
@@ -104,13 +105,13 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 	t.Run("Add block by block - no confirmed blocks", func(t *testing.T) {
 		t.Parallel()
 
-		tracker, err := NewEventTracker(createTestTrackerConfig(t, 10, 10, 0, nil), store.NewTestTrackerStore(t), 0)
+		tracker, err := NewEventTracker(createTestTrackerConfig(t, 10, 10, 0, nil), store.NewTestTrackerStore(t))
 
 		require.NoError(t, err)
 
 		// add some blocks, but don't go to confirmation level
 		for i := uint64(1); i <= tracker.config.NumBlockConfirmations; i++ {
-			require.NoError(t, tracker.trackBlock(
+			require.NoError(t, tracker.trackBlock(context.Background(),
 				&ethgo.Block{
 					Number:     i,
 					Hash:       ethgo.Hash{byte(i)},
@@ -147,7 +148,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 
 		// create a tracker with invalid subscriber
 		_, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.Error(t, err)
 		require.ErrorContains(t, err, "invalid configuration, event subscriber not set")
 	})
@@ -164,7 +165,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.On("GetLogs", mock.Anything).Return([]*ethgo.Log{}, nil).Once()
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, 10, 0, blockProviderMock),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 
 		// add some blocks
@@ -188,7 +189,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			Hash:       ethgo.Hash{byte(block.Number + 1)},
 			ParentHash: block.Hash,
 		}
-		require.NoError(t, tracker.trackBlock(latestBlock))
+		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
 
 		// check if the last cached block is as expected
 		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
@@ -229,7 +230,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.On("GetLogs", mock.Anything).Return(logs, nil).Once()
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, 10, 0, blockProviderMock),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 
 		// add some blocks
@@ -253,7 +254,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			Hash:       ethgo.Hash{byte(block.Number + 1)},
 			ParentHash: block.Hash,
 		}
-		require.NoError(t, tracker.trackBlock(latestBlock))
+		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
 
 		// check if the last cached block is as expected
 		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
@@ -301,7 +302,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 
 		// create a tracker with invalid subscriber
 		_, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.Error(t, err)
 		require.ErrorContains(t, err, "invalid configuration, event subscriber not set")
 	})
@@ -317,7 +318,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.On("GetLogs", mock.Anything).Return(nil, errors.New("some error occurred")).Once()
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, 10, 0, blockProviderMock),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 
 		// add some blocks
@@ -341,7 +342,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			Hash:       ethgo.Hash{byte(block.Number + 1)},
 			ParentHash: block.Hash,
 		}
-		require.ErrorContains(t, tracker.trackBlock(latestBlock), "some error occurred")
+		require.ErrorContains(t, tracker.trackBlock(context.Background(), latestBlock), "some error occurred")
 
 		// check if the last cached block is as expected
 		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
@@ -386,7 +387,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(int(numOfMissedBlocks))
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, blockProviderMock),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 
 		// mock getting missed blocks
@@ -410,7 +411,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			Hash:       ethgo.Hash{byte(block.Number + 1)},
 			ParentHash: block.Hash,
 		}
-		require.NoError(t, tracker.trackBlock(latestBlock))
+		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
 
 		// check if the last cached block is as expected
 		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
@@ -475,7 +476,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			int(numOfMissedBlocks + numOfCachedBlocks))
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, blockProviderMock),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 
 		var block *ethgo.Block
@@ -512,7 +513,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			Hash:       ethgo.Hash{byte(block.Number + 1)},
 			ParentHash: block.Hash,
 		}
-		require.NoError(t, tracker.trackBlock(latestBlock))
+		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
 
 		// check if the last cached block is as expected
 		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
@@ -570,7 +571,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(int(numOfCachedBlocks))
 
 		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, blockProviderMock),
-			store.NewTestTrackerStore(t), 0)
+			store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 
 		var block *ethgo.Block
@@ -605,7 +606,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 			Hash:       ethgo.Hash{byte(block.Number + 1)},
 			ParentHash: block.Hash,
 		}
-		require.NoError(t, tracker.trackBlock(latestBlock))
+		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
 
 		// check if the last cached block is as expected
 		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
@@ -635,13 +636,54 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		blockProviderMock.AssertExpectations(t)
 	})
 
+	t.Run("Indexer is in the future", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			batchSize             = uint64(4)
+			numBlockConfirmations = uint64(3)
+			numOfCachedBlocks     = uint64(4)
+		)
+
+		config := createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, new(mockProvider))
+		config.StartBlockFromGenesis = 1000
+
+		tracker, err := NewEventTracker(config, store.NewTestTrackerStore(t))
+		require.NoError(t, err)
+
+		// mock getting new state
+		for i := uint64(1); i <= numOfCachedBlocks; i++ {
+			tracker.blockContainer.blocks = append(tracker.blockContainer.blocks, i)
+			tracker.blockContainer.numToHashMap[i] = ethgo.Hash{byte(i)}
+		}
+
+		for i := numOfCachedBlocks; i <= numOfCachedBlocks+2; i++ {
+			lastProcessedBlock := numOfCachedBlocks + 1 // on last iteration we test getNewState
+			if i == numOfCachedBlocks+2 {
+				lastProcessedBlock = i
+			}
+
+			tracker.blockContainer.lastProcessedConfirmedBlock = lastProcessedBlock
+
+			err = tracker.trackBlock(context.Background(), &ethgo.Block{
+				Number:     i,
+				Hash:       ethgo.Hash{byte(i)},
+				ParentHash: ethgo.Hash{byte(i - 1)},
+			})
+
+			require.NoError(t, err)
+			require.Equal(t, lastProcessedBlock, tracker.blockContainer.LastProcessedBlock())
+			require.Equal(t, numOfCachedBlocks, tracker.blockContainer.LastCachedBlock())
+		}
+	})
+
 	t.Run("Create a tracker - invalid/default store", func(t *testing.T) {
 		t.Parallel()
 
 		batchSize := uint64(4)
 		numBlockConfirmations := uint64(3)
 
-		_, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, nil), nil, 0)
+		_, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, nil), nil)
 		require.NoError(t, err)
 
 		// Remove default.db file created during test
@@ -653,7 +695,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 	t.Run("Create a tracker with invalid config", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := NewEventTracker(nil, nil, 0)
+		_, err := NewEventTracker(nil, nil)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "invalid configuration")
 	})
@@ -667,7 +709,7 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		config := createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, nil)
 		config.Logger = nil
 
-		_, err := NewEventTracker(config, store.NewTestTrackerStore(t), 0)
+		_, err := NewEventTracker(config, store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 	})
 }
