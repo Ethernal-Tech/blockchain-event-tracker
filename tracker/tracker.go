@@ -230,6 +230,8 @@ func (e *EventTracker) Start(ctx context.Context) {
 		"syncBatchSize", e.config.SyncBatchSize,
 		"numOfBlocksToReconcile", e.config.NumOfBlocksToReconcile,
 		"logFilter", e.config.LogFilter,
+		"startBlockFromGenesis", e.config.StartBlockFromGenesis,
+		"lastProcessedBlock", e.blockContainer.LastProcessedBlock(),
 	)
 
 	defer func() {
