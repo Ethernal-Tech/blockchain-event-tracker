@@ -28,9 +28,7 @@ func NewJSONBlockTracker(
 
 // Track implements the BlockTracker interface.
 // This can take a long time so should be run concurrently.
-func (k *JSONBlockTracker) Track(ctx context.Context, handle func(block *ethgo.Block) error) error {
-	var lastBlock *ethgo.Block
-
+func (k *JSONBlockTracker) Track(ctx context.Context, handler func(block *ethgo.Block) error) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -42,15 +40,16 @@ func (k *JSONBlockTracker) Track(ctx context.Context, handle func(block *ethgo.B
 				return err
 			}
 
-			if block == nil || (lastBlock != nil && lastBlock.Hash == block.Hash) {
+			// no need for `lastBlock != nil && lastBlock.Hash == block.Hash` check
+			// because handler will decide if the block is new or not,
+			// and if it is not new, it can just return nil without doing anything
+			if block == nil {
 				continue
 			}
 
-			if err := handle(block); err != nil {
+			if err := handler(block); err != nil {
 				return err
 			}
-
-			lastBlock = block
 		}
 	}
 }
