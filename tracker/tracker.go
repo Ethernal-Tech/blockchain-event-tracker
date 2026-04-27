@@ -69,6 +69,9 @@ type EventTrackerConfig struct {
 	// for latest block on the tracked chain.
 	PollInterval time.Duration `json:"pollInterval"`
 
+	// LatestBlockNumberStrategy defines the strategy of which block number to use when polling for the latest block.
+	LatestBlockNumberStrategy ethgo.BlockNumber `json:"latestBlockNumberStrategy"`
+
 	// LogFilter defines which events are tracked and from which contracts on the tracked chain
 	LogFilter map[ethgo.Address][]ethgo.Hash `json:"logFilter"`
 
@@ -145,6 +148,14 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		return nil, fmt.Errorf("invalid configuration, event subscriber not set. Failed to init Event Tracker")
 	}
 
+	if config.LatestBlockNumberStrategy == 0 {
+		config.LatestBlockNumberStrategy = ethgo.Latest
+	}
+
+	if config.PollInterval == 0 {
+		config.PollInterval = 1 * time.Second
+	}
+
 	if store == nil {
 		var err error
 
@@ -175,7 +186,7 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 	lastProcessedBlock = max(lastProcessedBlock, config.StartBlockFromGenesis)
 
 	if config.NumOfBlocksToReconcile > 0 {
-		latestBlock, err := config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
+		latestBlock, err := config.BlockProvider.GetBlockByNumber(config.LatestBlockNumberStrategy, false)
 		if err != nil {
 			return nil, err
 		}
@@ -190,9 +201,10 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 	}
 
 	return &EventTracker{
-		config:         config,
-		store:          store,
-		blockTracker:   blocktracker.NewJSONBlockTracker(config.BlockProvider),
+		config: config,
+		store:  store,
+		blockTracker: NewJSONBlockTracker(
+			config.BlockProvider, config.PollInterval, config.LatestBlockNumberStrategy),
 		blockContainer: NewTrackerBlockContainer(lastProcessedBlock),
 		chainID:        chainID,
 	}, nil
@@ -308,7 +320,7 @@ func (e *EventTracker) syncOnStart(ctx context.Context) (err error) {
 	e.once.Do(func() {
 		e.config.Logger.Info("Syncing up on start...")
 
-		latestBlock, err = e.config.BlockProvider.GetBlockByNumber(ethgo.Latest, false)
+		latestBlock, err = e.config.BlockProvider.GetBlockByNumber(e.config.LatestBlockNumberStrategy, false)
 		if err != nil {
 			return
 		}
@@ -353,7 +365,7 @@ func (e *EventTracker) getNewState(ctx context.Context, latestBlock *ethgo.Block
 	}
 
 	if latestBlock == nil {
-		return fmt.Errorf("getting new state failed: latest block is nil")
+		return errors.New("getting new state failed: latest block is nil")
 	}
 
 	// if latest block already in memory -> exit
