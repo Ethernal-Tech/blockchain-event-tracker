@@ -10,18 +10,18 @@ import (
 // JSONBlockTracker implements the BlockTracker interface using
 // the http jsonrpc endpoint
 type JSONBlockTracker struct {
-	pullInterval              time.Duration
+	pollInterval              time.Duration
 	provider                  BlockProvider
 	latestBlockNumberStrategy ethgo.BlockNumber
 }
 
 // NewJSONBlockTracker creates a new json block tracker
 func NewJSONBlockTracker(
-	provider BlockProvider, pullInterval time.Duration, latestBlockNumberStrategy ethgo.BlockNumber,
+	provider BlockProvider, pollInterval time.Duration, latestBlockNumberStrategy ethgo.BlockNumber,
 ) *JSONBlockTracker {
 	return &JSONBlockTracker{
 		provider:                  provider,
-		pullInterval:              pullInterval,
+		pollInterval:              pollInterval,
 		latestBlockNumberStrategy: latestBlockNumberStrategy,
 	}
 }
@@ -36,7 +36,7 @@ func (k *JSONBlockTracker) Track(ctx context.Context, handle func(block *ethgo.B
 		case <-ctx.Done():
 			return ctx.Err()
 
-		case <-time.After(k.pullInterval):
+		case <-time.After(k.pollInterval):
 			block, err := k.provider.GetBlockByNumber(k.latestBlockNumberStrategy, false)
 			if err != nil {
 				return err
