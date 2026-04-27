@@ -65,9 +65,9 @@ type EventTrackerConfig struct {
 	// we tell the tracker to sync only latestBlock.Number - NumOfBlocksToReconcile number of blocks.
 	NumOfBlocksToReconcile uint64 `json:"numOfBlocksToReconcile"`
 
-	// PollInterval defines a time interval in which tracker polls json rpc node
+	// PullInterval defines a time interval in which tracker polls json rpc node
 	// for latest block on the tracked chain.
-	PollInterval time.Duration `json:"pollInterval"`
+	PullInterval time.Duration `json:"pullInterval"`
 
 	// LatestBlockNumberStrategy defines the strategy of which block number to use when polling for the latest block.
 	LatestBlockNumberStrategy ethgo.BlockNumber `json:"latestBlockNumberStrategy"`
@@ -152,8 +152,8 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		config.LatestBlockNumberStrategy = ethgo.Latest
 	}
 
-	if config.PollInterval == 0 {
-		config.PollInterval = 1 * time.Second
+	if config.PullInterval == 0 {
+		config.PullInterval = 1 * time.Second
 	}
 
 	if store == nil {
@@ -204,7 +204,7 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		config: config,
 		store:  store,
 		blockTracker: NewJSONBlockTracker(
-			config.BlockProvider, config.PollInterval, config.LatestBlockNumberStrategy),
+			config.BlockProvider, config.PullInterval, config.LatestBlockNumberStrategy),
 		blockContainer: NewTrackerBlockContainer(lastProcessedBlock),
 		chainID:        chainID,
 	}, nil
@@ -238,7 +238,7 @@ func (e *EventTracker) Start(ctx context.Context) {
 	e.config.Logger.Info("Starting event tracker",
 		"jsonRpcEndpoint", e.config.RPCEndpoint,
 		"numBlockConfirmations", e.config.NumBlockConfirmations,
-		"pollInterval", e.config.PollInterval,
+		"pollInterval", e.config.PullInterval,
 		"syncBatchSize", e.config.SyncBatchSize,
 		"numOfBlocksToReconcile", e.config.NumOfBlocksToReconcile,
 		"logFilter", e.config.LogFilter,
