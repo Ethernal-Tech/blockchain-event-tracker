@@ -42,8 +42,7 @@ func (k *JSONBlockTracker) Track(ctx context.Context, handle func(block *ethgo.B
 				return err
 			}
 
-			// If the block is the same as the last one or nil, skip processing it
-			if lastBlock == nil || lastBlock.Hash == block.Hash {
+			if block == nil || (lastBlock != nil && lastBlock.Hash == block.Hash) {
 				continue
 			}
 
