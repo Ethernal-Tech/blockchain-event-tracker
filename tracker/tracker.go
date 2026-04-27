@@ -352,6 +352,10 @@ func (e *EventTracker) getNewState(ctx context.Context, latestBlock *ethgo.Block
 		return nil // no need to get new state, since we are already up to date or in the future
 	}
 
+	if latestBlock == nil {
+		return fmt.Errorf("getting new state failed: latest block is nil")
+	}
+
 	// if latest block already in memory -> exit
 	if e.blockContainer.BlockExists(latestBlock) {
 		return nil
@@ -458,6 +462,12 @@ func (e *EventTracker) getNewStateFromLatest(
 			e.config.Logger.Error("Getting block failed", "blockNum", blockNum, "err", err)
 
 			return err
+		}
+
+		if block == nil {
+			return fmt.Errorf(
+				"getting block failed: block is nil, blockNum: %d, latestBlock: %d, startedBlock = %d",
+				blockNum, latestBlock.Number, startBlock)
 		}
 
 		if e.blockContainer.BlockExists(block) {
