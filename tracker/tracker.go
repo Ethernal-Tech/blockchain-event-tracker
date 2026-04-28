@@ -154,7 +154,7 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 	}
 
 	if config.PollInterval == 0 {
-		config.PollInterval = 5 * time.Second
+		config.PollInterval = 3 * time.Second
 	}
 
 	if store == nil {
