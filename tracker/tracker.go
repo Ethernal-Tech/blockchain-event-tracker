@@ -148,12 +148,13 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		return nil, fmt.Errorf("invalid configuration, event subscriber not set. Failed to init Event Tracker")
 	}
 
+	// it is not possible to have earliest block as strategy which is ok
 	if config.LatestBlockNumberStrategy == 0 {
 		config.LatestBlockNumberStrategy = ethgo.Latest
 	}
 
 	if config.PollInterval == 0 {
-		config.PollInterval = 1 * time.Second
+		config.PollInterval = 5 * time.Second
 	}
 
 	if store == nil {
