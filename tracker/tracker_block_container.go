@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -94,6 +95,10 @@ func (t *TrackerBlockContainer) LastCachedBlock() uint64 {
 //   - block (ethgo.Block): The block to be added to the tracker cache for later processing,
 //     once it hits confirmation number.
 func (t *TrackerBlockContainer) AddBlock(block *ethgo.Block) error {
+	if block == nil {
+		return errors.New("can not add a nil block to the tracker cache")
+	}
+
 	if hash, exists := t.numToHashMap[block.Number-1]; len(t.blocks) > 0 && (!exists || block.ParentHash != hash) {
 		return fmt.Errorf("no parent for block %d, or a reorg happened", block.Number)
 	}

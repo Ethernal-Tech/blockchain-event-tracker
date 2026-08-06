@@ -187,7 +187,7 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 	lastProcessedBlock = max(lastProcessedBlock, config.StartBlockFromGenesis)
 
 	if config.NumOfBlocksToReconcile > 0 {
-		latestBlock, err := config.BlockProvider.GetBlockByNumber(config.LatestBlockNumberStrategy, false)
+		latestBlock, err := getBlockByNumber(config.BlockProvider, config.LatestBlockNumberStrategy)
 		if err != nil {
 			return nil, err
 		}
@@ -321,7 +321,7 @@ func (e *EventTracker) syncOnStart(ctx context.Context) (err error) {
 	e.once.Do(func() {
 		e.config.Logger.Info("Syncing up on start...")
 
-		latestBlock, err = e.config.BlockProvider.GetBlockByNumber(e.config.LatestBlockNumberStrategy, false)
+		latestBlock, err = getBlockByNumber(e.config.BlockProvider, e.config.LatestBlockNumberStrategy)
 		if err != nil {
 			return
 		}
@@ -353,6 +353,10 @@ func (e *EventTracker) syncOnStart(ctx context.Context) (err error) {
 //   - nil if there are no confirmed blocks.
 //   - An error if there is an error retrieving blocks or logs from the external provider or saving logs to the store.
 func (e *EventTracker) getNewState(ctx context.Context, latestBlock *ethgo.Block) error {
+	if latestBlock == nil {
+		return errors.New("getting new state failed: latest block is nil")
+	}
+
 	e.blockContainer.AcquireWriteLock()
 	defer e.blockContainer.ReleaseWriteLock()
 
@@ -363,10 +367,6 @@ func (e *EventTracker) getNewState(ctx context.Context, latestBlock *ethgo.Block
 
 	if e.blockContainer.IsBlockFromThePastLocked(latestBlock) {
 		return nil // no need to get new state, since we are already up to date or in the future
-	}
-
-	if latestBlock == nil {
-		return errors.New("getting new state failed: latest block is nil")
 	}
 
 	// if latest block already in memory -> exit
@@ -417,7 +417,7 @@ func (e *EventTracker) getNewStateFromFirst(
 				return err
 			}
 
-			block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(j), false) //nolint:gosec
+			block, err := getBlockByNumber(e.config.BlockProvider, ethgo.BlockNumber(j)) //nolint:gosec
 			if err != nil {
 				e.config.Logger.Error("Getting new state for block batch failed on rpc call",
 					"fromBlock", i,
@@ -470,17 +470,15 @@ func (e *EventTracker) getNewStateFromLatest(
 			return err
 		}
 
-		block, err := e.config.BlockProvider.GetBlockByNumber(ethgo.BlockNumber(blockNum), false) //nolint:gosec
+		block, err := getBlockByNumber(e.config.BlockProvider, ethgo.BlockNumber(blockNum)) //nolint:gosec
 		if err != nil {
-			e.config.Logger.Error("Getting block failed", "blockNum", blockNum, "err", err)
+			e.config.Logger.Error("Getting block failed",
+				"blockNum", blockNum,
+				"latestBlock", latestBlock.Number,
+				"startBlock", startBlock,
+				"err", err)
 
 			return err
-		}
-
-		if block == nil {
-			return fmt.Errorf(
-				"getting block failed: block is nil, blockNum: %d, latestBlock: %d, startedBlock = %d",
-				blockNum, latestBlock.Number, startBlock)
 		}
 
 		if e.blockContainer.BlockExists(block) {
@@ -670,6 +668,33 @@ func setupBlockProvider(config *EventTrackerConfig, force bool) error {
 	config.BlockProvider = clt.Eth()
 
 	return nil
+}
+
+// getBlockByNumber retrieves a block from the tracked chain and guarantees that,
+// when no error is returned, the returned block is not nil.
+// A json rpc node answers with a null block, and no error, for a block it does not have.
+// This happens, for example, when the endpoint is load balanced and the request is served by a
+// node that lags behind the one which reported the latest block, or when the node was resynced.
+// Such a result is turned into an error here, instead of being propagated to the callers.
+//
+// Input:
+//   - provider (BlockProvider): provider that returns blocks from the tracked chain.
+//   - blockNumber (ethgo.BlockNumber): the number, or the strategy, of the block to retrieve.
+//
+// Returns:
+//   - the requested block, if the tracked chain has it.
+//   - an error if the rpc call failed, or if the tracked chain does not have the given block.
+func getBlockByNumber(provider BlockProvider, blockNumber ethgo.BlockNumber) (*ethgo.Block, error) {
+	block, err := provider.GetBlockByNumber(blockNumber, false)
+	if err != nil {
+		return nil, err
+	}
+
+	if block == nil {
+		return nil, fmt.Errorf("block %s not found on the tracked chain", blockNumber.String())
+	}
+
+	return block, nil
 }
 
 // checkIfContextDone checks if the context is done and returns an error if it is.
