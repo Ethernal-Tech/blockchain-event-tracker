@@ -299,3 +299,10 @@ func TestTrackerBlockContainer_AddBlockAndLastCachedBlock(t *testing.T) {
 		require.Equal(t, tbc.blocks[i], uint64(i+1))
 	}
 }
+
+func TestTrackerBlockContainer_AddBlock_Nil(t *testing.T) {
+	t.Parallel()
+
+	tbc := NewTrackerBlockContainer(0)
+	require.ErrorContains(t, tbc.AddBlock(nil), "can not add a nil block to the tracker cache")
+}

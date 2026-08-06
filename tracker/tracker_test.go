@@ -714,6 +714,122 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 	})
 }
 
+func TestGetBlockByNumber(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns error when provider returns nil block without error", func(t *testing.T) {
+		t.Parallel()
+
+		providerMock := new(mockProvider)
+		providerMock.On("GetBlockByNumber", ethgo.BlockNumber(42), false).Return(nil, nil).Once()
+
+		block, err := getBlockByNumber(providerMock, ethgo.BlockNumber(42))
+		require.Nil(t, block)
+		require.ErrorContains(t, err, "not found on the tracked chain")
+		providerMock.AssertExpectations(t)
+	})
+
+	t.Run("propagates provider error", func(t *testing.T) {
+		t.Parallel()
+
+		providerMock := new(mockProvider)
+		providerMock.On("GetBlockByNumber", ethgo.BlockNumber(7), false).
+			Return(nil, errors.New("rpc down")).Once()
+
+		block, err := getBlockByNumber(providerMock, ethgo.BlockNumber(7))
+		require.Nil(t, block)
+		require.ErrorContains(t, err, "rpc down")
+		providerMock.AssertExpectations(t)
+	})
+
+	t.Run("returns block when present", func(t *testing.T) {
+		t.Parallel()
+
+		expected := &ethgo.Block{Number: 3, Hash: ethgo.Hash{3}}
+		providerMock := new(mockProvider)
+		providerMock.On("GetBlockByNumber", ethgo.BlockNumber(3), false).Return(expected, nil).Once()
+
+		block, err := getBlockByNumber(providerMock, ethgo.BlockNumber(3))
+		require.NoError(t, err)
+		require.Equal(t, expected, block)
+		providerMock.AssertExpectations(t)
+	})
+}
+
+func TestEventTracker_GetNewState_NilLatestBlock(t *testing.T) {
+	t.Parallel()
+
+	eventTracker := &EventTracker{
+		config: &EventTrackerConfig{
+			NumBlockConfirmations: 3,
+			SyncBatchSize:         5,
+			Logger:                hclog.NewNullLogger(),
+			BlockProvider:         new(mockProvider),
+		},
+		blockContainer: NewTrackerBlockContainer(0),
+		store:          store.NewTestTrackerStore(t),
+	}
+
+	require.ErrorContains(t, eventTracker.getNewState(context.Background(), nil), "latest block is nil")
+}
+
+func TestEventTracker_GetNewState_NilBlockFromProvider(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sync up from first block", func(t *testing.T) {
+		t.Parallel()
+
+		// Gap must exceed max(confirmations, maxBlockGapForLatestSync) to take FromFirst.
+		providerMock := new(mockProvider)
+		providerMock.On("GetBlockByNumber", ethgo.BlockNumber(1), false).Return(nil, nil).Once()
+
+		eventTracker := &EventTracker{
+			config: &EventTrackerConfig{
+				NumBlockConfirmations: 3,
+				SyncBatchSize:         4,
+				Logger:                hclog.NewNullLogger(),
+				BlockProvider:         providerMock,
+			},
+			blockContainer: NewTrackerBlockContainer(0),
+			store:          store.NewTestTrackerStore(t),
+		}
+
+		err := eventTracker.getNewState(context.Background(), &ethgo.Block{
+			Number: 20,
+			Hash:   ethgo.Hash{20},
+		})
+		require.ErrorContains(t, err, "not found on the tracked chain")
+		providerMock.AssertExpectations(t)
+	})
+
+	t.Run("sync up from latest block", func(t *testing.T) {
+		t.Parallel()
+
+		providerMock := new(mockProvider)
+		// FromLatest walks downward from latest-1; first RPC call is for block 9.
+		providerMock.On("GetBlockByNumber", ethgo.BlockNumber(9), false).Return(nil, nil).Once()
+
+		eventTracker := &EventTracker{
+			config: &EventTrackerConfig{
+				NumBlockConfirmations: 3,
+				SyncBatchSize:         4,
+				Logger:                hclog.NewNullLogger(),
+				BlockProvider:         providerMock,
+			},
+			blockContainer: NewTrackerBlockContainer(5),
+			store:          store.NewTestTrackerStore(t),
+		}
+
+		err := eventTracker.getNewState(context.Background(), &ethgo.Block{
+			Number:     10,
+			Hash:       ethgo.Hash{10},
+			ParentHash: ethgo.Hash{9},
+		})
+		require.ErrorContains(t, err, "not found on the tracked chain")
+		providerMock.AssertExpectations(t)
+	})
+}
+
 func createTestTrackerConfig(t *testing.T,
 	numBlockConfirmations, batchSize, numOfBlocksToReconcile uint64, blockProviderMock *mockProvider) *EventTrackerConfig {
 	t.Helper()
