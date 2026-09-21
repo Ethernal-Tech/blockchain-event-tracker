@@ -138,3 +138,23 @@ func TestEventTrackerStore_InsertAndGetLogs(t *testing.T) {
 		require.Nil(t, log)
 	})
 }
+
+func TestEventTrackerStore_InsertLogsAndLastProcessedBlock(t *testing.T) {
+	t.Parallel()
+
+	trackerStore := NewTestTrackerStore(t)
+	logs := []*ethgo.Log{
+		CreateTestLogForStateSyncEvent(t, 10, 0),
+		CreateTestLogForStateSyncEvent(t, 11, 1),
+	}
+
+	require.NoError(t, trackerStore.InsertLogsAndLastProcessedBlock(logs, 11))
+
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(11), lastProcessedBlock)
+
+	storedLogs, err := trackerStore.GetAllLogs()
+	require.NoError(t, err)
+	require.Len(t, storedLogs, len(logs))
+}

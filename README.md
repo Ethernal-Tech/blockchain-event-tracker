@@ -1,32 +1,69 @@
 # Event Tracker
 
-Event Tracker is a powerful tool designed to track events emitted by smart contracts during transaction execution on an EVM blockchain. Whether you're a developer debugging your smart contracts, creating your own bridge, or you're a blockchain enthusiast interested in monitoring contract interactions, Event Tracker simplifies the process of event monitoring and analysis.
+Event Tracker retrieves events (logs) emitted by smart contracts on an EVM blockchain and hands them to your application. It polls a json rpc node, reads logs only from blocks it considers confirmed, and remembers how far it got, so it resumes from there after a restart.
 
 ## Table of Contents
 
 - [Event Tracker](#event-tracker)
   - [Table of Contents](#table-of-contents)
   - [Introduction](#introduction)
+  - [How it works](#how-it-works)
   - [Features](#features)
+  - [What it does not do](#what-it-does-not-do)
     - [Prerequisites](#prerequisites)
     - [Installation](#installation)
   - [Usage](#usage)
     - [Configuring the Tracker](#configuring-the-tracker)
     - [Tracking events](#tracking-events)
+  - [The database](#the-database)
   - [Contributing](#contributing)
   - [License](#license)
 
 ## Introduction
 
-Smart contracts on the Ethereum blockchain often emit events to provide insights into their execution and state changes. Event Tracker simplifies the process of monitoring and analyzing these events, making it a useful tool for EVM developers and enthusiasts.
+Smart contracts emit events to report their execution and state changes. Event Tracker turns those events into a stream your application can consume, without you having to deal with polling, batching, checkpointing and restarts.
+
+It is a log indexer, and nothing more. It does not follow the chain block by block, and it keeps no in-memory model of the chain.
+
+## How it works
+
+On every poll interval the tracker performs one cycle:
+
+1. It determines `confirmedTo`, the last block whose logs are safe to read. This costs one rpc call, and which call it is depends on `ConfirmationStrategy`.
+2. It reads the last processed block from the store. That value is the checkpoint, and it means that logs up to and including that block were already delivered.
+3. If the checkpoint already reached `confirmedTo`, the cycle ends here.
+4. Otherwise it walks the range from `checkpoint + 1` to `confirmedTo` in steps of `SyncBatchSize`, spending one `eth_getLogs` call per step.
+5. For every log that matches `LogFilter`, it skips duplicates inside the same rpc response, skips logs the store already holds, and hands the rest to `EventSubscriber`.
+6. It then writes the logs of that step and the new checkpoint in a single database transaction, and moves to the next step.
+
+`ConfirmationStrategy` chooses how step one computes the boundary:
+
+| Strategy | Boundary | Rpc call |
+| --- | --- | --- |
+| `numBlockConfirmations` | latest block minus `NumBlockConfirmations` | `eth_blockNumber` |
+| `finalized` | the block the chain itself reports as finalized | `eth_getBlockByNumber("finalized")` |
+
+The default is `numBlockConfirmations`, which keeps working on chains that do not report finality. With `finalized`, `NumBlockConfirmations` is not applied, since such a block is already final, and the boundary lags further behind the head in exchange for a guarantee from consensus instead of an assumption. Not every chain and not every node supports that block tag. A node that does not support it answers with a null block and no error, and the tracker turns that into an error rather than treating the boundary as block zero.
+
+Once it is caught up, a cycle costs two rpc calls: one for the boundary and one for the logs.
 
 ## Features
 
-- **Real-time Event Tracking**: Event Tracker provides real-time monitoring of events emitted by smart contracts, enabling developers to react promptly to contract interactions.
+- **Confirmed log delivery**: only blocks below the confirmation boundary are read, so your application is not exposed to the unstable tip of the chain.
 
-- **Flexible Configuration**: Customize event tracking by specifying the contracts and events of interest, ensuring that you receive only the data you need.
+- **Durable checkpoints**: logs and the checkpoint are written in one transaction, so a crash can not advance the checkpoint past logs that were never stored.
 
-- **Data Storage**: Store event data locally for future analysis and reference.
+- **Resumes where it stopped**: on start it continues from the stored checkpoint, and syncs up every confirmed block it missed, however long it was down.
+
+- **Flexible configuration**: you choose the contracts and the events you care about, and how the confirmation boundary is computed.
+
+## What it does not do
+
+- **It does not detect reorgs.** With `numBlockConfirmations`, that the boundary is deep enough is an assumption you make through configuration. If a reorg reaches below it, the tracker will not notice, and the logs it already delivered will not be revoked. Use `finalized` when you need the chain to guarantee the boundary instead.
+
+- **It does not look above the boundary.** Logs from more recent blocks are not read at all, so the delivery always lags the head by at least the configured confirmations.
+
+- **It does not guarantee exactly once delivery.** The tracker recognizes an already delivered log by its block hash, transaction hash and log index, and skips it. That covers a restart and a retry after a failing subscriber. It does not cover the case where the subscriber accepted the logs of a batch and the database write then failed, because such a batch is retried whole. Your `EventSubscriber` has to tolerate seeing the same log twice.
 
 ### Prerequisites
 
@@ -42,48 +79,49 @@ Event Tracker is just a library, and is currently not intended to be used as a s
 
 ## Usage
 
-Event Tracker can be used to monitor, track, and analyze events emitted by smart contracts. Here's how to get started:
-
 ### Configuring the Tracker
 
-1. You can create a configuration file (e.g., config.json) to specify the public node URL and the contracts and events you want to track, as well as the rest of the configuration parameters, and then load the configuration file into the `EventTrackerConfig` struct which is passed to the Event Tracker instantiation.
+1. You can keep the configuration in a file (e.g., config.json) and load it into the `EventTrackerConfig` struct which is passed to the Event Tracker instantiation.
 
    ```json
    {
      "rpcEndpoint": "https://your-node-url.com",
-     "pollTime": "2s",
-     "syncBatchSize": 10,
+     "confirmationStrategy": "numBlockConfirmations",
      "numBlockConfirmations": 5,
-     "numOfBlocksToReconcile": 10000,
-     "logFilter": [
-       {
-         "0xContractAddress": ["EventSig1", "EventSig2"]
-       }
-     ]
-     ...
+     "syncBatchSize": 10,
+     "pollInterval": 2000000000,
+     "startBlockFromGenesis": 0,
+     "logFilter": {
+       "0xContractAddress": ["0xEventSig1", "0xEventSig2"]
+     }
    }
    ```
+
+   Note that `pollInterval` is a `time.Duration`, so in json it is a number of nanoseconds, and that `logFilter` is a map keyed by contract address.
 
 2. Or you can just specify the configuration in code:
 
 ```go
-    tracker := NewEventTracker(&EventTrackerConfig{
-        RPCEndpoint: "https://some-url.com",
-        PollTime: 10*time.Second,
-        SyncBatchSize: 10,
-        ...
-    })
+    tracker, err := tracker.NewEventTracker(&tracker.EventTrackerConfig{
+        RPCEndpoint:           "https://some-url.com",
+        NumBlockConfirmations: 5,
+        SyncBatchSize:         10,
+        PollInterval:          2 * time.Second,
+        LogFilter:             logFilter,
+        EventSubscriber:       subscriber,
+    }, store)
 ```
 
 Our recommendations are:
-- `NumBlockConfirmations` - set this to the number of blocks you feel are enough to consider a block final on the tracked chain (where he will not be replaced in a reorg).
-- `SyncBatchSize` - should be connected to the configured NumBlockConfirmations. For example, if the NumBlockConfirmations is 10, batch size should be around 25, meaning that while syncing one batch, you will have at least half of confirmed numbers in it, and tracker can process events from them as he syncs up with the tracked chain.
-- `NumOfBlocksToReconcile` - should be configured in regards to the business logic for which you are using the tracker. If it is important to sync up and catch events from all confirmed missed blocks in the chain, then just leave this as 0, and tracker will sync up with every block you missed in the chain to get the desired events. If your node or application was down for a longer of period of time (days, months), and if it is not important to sync up all the events from missed blocks, configure `NumOfBlocksToReconcile` to be the number of latest blocks that you consider relevant for you to sync up until the latest chain block.
+- `ConfirmationStrategy` - leave it unset, or set it to `numBlockConfirmations`, unless the tracked chain reports finality and you prefer that guarantee over a shorter delay.
+- `NumBlockConfirmations` - set this to the number of blocks you feel are enough to consider a block final on the tracked chain, meaning that it will not be replaced in a reorg. It is only used by the `numBlockConfirmations` strategy.
+- `SyncBatchSize` - this is how many blocks one `eth_getLogs` call covers, so keep it under whatever range your node accepts, and remember that a wider range means fewer calls but a bigger response. It has to be greater than zero.
 - `PollInterval` - should be configured to about the same as the block minting time on the tracked chain.
+- `StartBlockFromGenesis` - the block the tracker starts from when the stored checkpoint is behind it. It never moves the tracker backwards.
 - `Logger` - you can pass your own logger here, as long as it implements the `Logger` interface from `go-hclog`.
-- `Store` - you can pass your own store (as long as it implements the `EventTrackerStore` interface), or use the provided `BoltDBEventTrackerStore` from this repo, that creates and uses a `BoltDB` instance to store tracked blocks and events data.
-- `BlockProvider` - it's basically a json rpc client connected to the provided public node (`RPCEndpoint`), used to poll block and event data from tracked blockchain.
-- `EventSubscriber` - here you plugin your custom code for handling tracked events.
+- `Store` - you can pass your own store (as long as it implements the `EventTrackerStore` interface), or use the provided `BoltDBEventTrackerStore` from this repo, that creates and uses a `BoltDB` instance to store the tracked events and the checkpoint.
+- `Provider` - it's basically a json rpc client connected to the provided public node (`RPCEndpoint`), used to poll block and event data from tracked blockchain. When it is left unset, the tracker creates one for `RPCEndpoint` itself.
+- `EventSubscriber` - here you plugin your custom code for handling tracked events. It has to tolerate receiving the same log more than once.
 - `LogFilter` - here you configure which events (logs) on which contracts are going to be tracked. This is a map, where key is the contract address, and values are event signatures (event signatures are just hashed signatures of events, for example, if we have an event like this:
     ```solidity
         event SomeEvent(uint256 indexed id, address indexed sender, address indexed receiver, bytes data);
@@ -93,30 +131,38 @@ Our recommendations are:
 
 ### Tracking events
 
-Start the Event Tracker by calling the `Start` function:
+Start the Event Tracker by calling the `Start` function. It blocks and retries until the context is cancelled, so run it in its own goroutine:
 
 ```go
-    tracker, err := NewEventTracker(&EventTrackerConfig{
-        RPCEndpoints: "https://some-url.com",
-        PollTime: 10*time.Second,
-        SyncBatchSize: 10,
-        ...
-    })
+    eventTracker, err := tracker.NewEventTracker(config, store)
     if err != nil {
         return err
     }
 
-    if err = tracker.Start(); err != nil {
-        return err
-    }
+    go eventTracker.Start(ctx)
 ```
 
-Event Tracker will begin monitoring the specified contracts and events in real-time.
-On each tracked configured event, this function will be called on `EventSubscriber` to handle the event:
+For every tracked event, this method is called on `EventSubscriber` to handle it:
+
 ```go
-    tracker.config.EventSubscriber.AddLog(log)
+    eventTracker.config.EventSubscriber.AddLog(chainID, log)
 ```
-and if a custom `Store` is not provided, the default `BoltDBEventTrackerStore` will save the event in a `boltDB` instance, so it can be queried later by your application.
+
+If `AddLog` returns an error, the checkpoint is not advanced, the logs accepted so far are still stored, and the batch is retried, skipping what was already delivered. Every delivered log is also saved in the store, so your application can query it later.
+
+## The database
+
+The store keeps two things, the checkpoint and the tracked logs, in a `BoltDB` file:
+
+```text
+bucket   lastProcessedTrackerBucket   key    lastProcessedTrackerBlock
+bucket   logs                         key    uint64(blockNumber) || uint64(logIndex)
+value    the log, as json
+```
+
+Block numbers and log indices are big endian, and the checkpoint is the number of the last block whose logs were processed.
+
+This layout is a compatibility contract, because a tracker is normally deployed over a database an earlier version created, and because other applications read the same file. Renaming a bucket, or changing how a key is built, orphans every existing database. The tests in `store/legacy_compatibility_test.go` check both directions, that the store reads a database it has never written to, and that what it writes lands under these names and keys.
 
 ## Contributing
 We welcome contributions to Event Tracker! If you have ideas for improvements or find bugs, please open an issue or submit a pull request.

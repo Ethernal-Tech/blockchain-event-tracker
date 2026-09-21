@@ -20,6 +20,7 @@ type EventTrackerStore interface {
 	GetLastProcessedBlock() (uint64, error)
 	InsertLastProcessedBlock(blockNumber uint64) error
 	InsertLogs(logs []*ethgo.Log) error
+	InsertLogsAndLastProcessedBlock(logs []*ethgo.Log, blockNumber uint64) error
 	GetLogsByBlockNumber(blockNumber uint64) ([]*ethgo.Log, error)
 	GetLog(blockNumber, logIndex uint64) (*ethgo.Log, error)
 	GetAllLogs() ([]*ethgo.Log, error)
@@ -65,6 +66,12 @@ func NewBoltDBEventTrackerStore(dbPath string) (*BoltDBEventTrackerStore, error)
 	}
 
 	return &BoltDBEventTrackerStore{db: db}, nil
+}
+
+// Close releases the database file, so that another process, or another store
+// instance, can open it.
+func (p *BoltDBEventTrackerStore) Close() error {
+	return p.db.Close()
 }
 
 // GetLastProcessedBlock retrieves the last processed block number from a BoltDB database.
@@ -131,24 +138,44 @@ func (p *BoltDBEventTrackerStore) InsertLastProcessedBlock(lastProcessedBlockNum
 //   - error: If an error occurs during the insertion process, it is returned. Otherwise, nil is returned.
 func (p *BoltDBEventTrackerStore) InsertLogs(logs []*ethgo.Log) error {
 	return p.db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(petLogsBucket)
+		return insertLogs(tx, logs)
+	})
+}
 
-		for _, log := range logs {
-			raw, err := json.Marshal(log)
-			if err != nil {
-				return err
-			}
-
-			logKey := bytes.Join([][]byte{
-				common.EncodeUint64ToBytes(log.BlockNumber),
-				common.EncodeUint64ToBytes(log.LogIndex)}, nil)
-			if err := bucket.Put(logKey, raw); err != nil {
-				return err
-			}
+// InsertLogsAndLastProcessedBlock atomically persists logs and advances the
+// last-processed-block checkpoint. If either write fails, BoltDB rolls back
+// the complete transaction.
+func (p *BoltDBEventTrackerStore) InsertLogsAndLastProcessedBlock(
+	logs []*ethgo.Log, blockNumber uint64,
+) error {
+	return p.db.Update(func(tx *bolt.Tx) error {
+		if err := insertLogs(tx, logs); err != nil {
+			return err
 		}
 
-		return nil
+		return tx.Bucket(petLastProcessedBlockBucket).Put(
+			petLastProcessedBlockKey, common.EncodeUint64ToBytes(blockNumber))
 	})
+}
+
+func insertLogs(tx *bolt.Tx, logs []*ethgo.Log) error {
+	bucket := tx.Bucket(petLogsBucket)
+
+	for _, log := range logs {
+		raw, err := json.Marshal(log)
+		if err != nil {
+			return err
+		}
+
+		logKey := bytes.Join([][]byte{
+			common.EncodeUint64ToBytes(log.BlockNumber),
+			common.EncodeUint64ToBytes(log.LogIndex)}, nil)
+		if err := bucket.Put(logKey, raw); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // GetLogsByBlockNumber retrieves all logs that happened in given block from a BoltDB database.

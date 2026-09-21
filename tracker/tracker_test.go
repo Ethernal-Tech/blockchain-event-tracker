@@ -18,44 +18,47 @@ import (
 var _ EventSubscriber = (*mockEventSubscriber)(nil)
 
 type mockEventSubscriber struct {
-	logs []*ethgo.Log
+	logs         []*ethgo.Log
+	addLogErrors []error
+	addLogCalls  int
 }
 
 func (m *mockEventSubscriber) AddLog(chainID *big.Int, log *ethgo.Log) error {
+	callIndex := m.addLogCalls
+	m.addLogCalls++
+
+	if callIndex < len(m.addLogErrors) && m.addLogErrors[callIndex] != nil {
+		return m.addLogErrors[callIndex]
+	}
+
 	m.logs = append(m.logs, log)
 
 	return nil
 }
 
-var _ BlockProvider = (*mockProvider)(nil)
+var _ Provider = (*mockProvider)(nil)
 
 type mockProvider struct {
 	mock.Mock
-
-	blocks map[uint64]*ethgo.Block
-	logs   []*ethgo.Log
 }
 
-// GetBlockByHash implements tracker.Provider.
-func (m *mockProvider) GetBlockByHash(hash ethgo.Hash, full bool) (*ethgo.Block, error) {
-	args := m.Called(hash, full)
+// BlockNumber implements tracker.Provider.
+func (m *mockProvider) BlockNumber() (uint64, error) {
+	args := m.Called()
 
-	return1 := args.Get(0)
+	return args.Get(0).(uint64), args.Error(1) //nolint:forcetypeassert
+}
 
-	if return1 != nil {
-		return return1.(*ethgo.Block), args.Error(1) //nolint:forcetypeassert
+func matchesLogRange(fromBlock, toBlock uint64) func(*ethgo.LogFilter) bool {
+	return func(filter *ethgo.LogFilter) bool {
+		return filter.From != nil && uint64(*filter.From) == fromBlock &&
+			filter.To != nil && uint64(*filter.To) == toBlock
 	}
-
-	return nil, args.Error(1)
 }
 
 // GetBlockByNumber implements tracker.Provider.
 func (m *mockProvider) GetBlockByNumber(i ethgo.BlockNumber, full bool) (*ethgo.Block, error) {
 	args := m.Called(i, full)
-
-	if m.blocks != nil {
-		return m.blocks[uint64(i)], nil
-	}
 
 	return1 := args.Get(0)
 
@@ -69,13 +72,6 @@ func (m *mockProvider) GetBlockByNumber(i ethgo.BlockNumber, full bool) (*ethgo.
 // GetLogs implements tracker.Provider.
 func (m *mockProvider) GetLogs(filter *ethgo.LogFilter) ([]*ethgo.Log, error) {
 	args := m.Called(filter)
-
-	if len(m.logs) > 0 {
-		returnLog := m.logs[0]
-		m.logs = m.logs[1:]
-
-		return []*ethgo.Log{returnLog}, nil
-	}
 
 	return1 := args.Get(0)
 
@@ -99,591 +95,22 @@ func (m *mockProvider) ChainID() (*big.Int, error) {
 	return nil, args.Error(1)
 }
 
-func TestEventTracker_TrackBlock(t *testing.T) {
+func TestNewEventTracker(t *testing.T) {
 	t.Parallel()
 
-	t.Run("Add block by block - no confirmed blocks", func(t *testing.T) {
+	t.Run("creates a tracker with a valid configuration", func(t *testing.T) {
 		t.Parallel()
 
-		tracker, err := NewEventTracker(createTestTrackerConfig(t, 10, 10, 0, nil), store.NewTestTrackerStore(t))
+		config := createTestTrackerConfig(t, 3, 4, nil)
 
+		_, err := NewEventTracker(config, store.NewTestTrackerStore(t))
 		require.NoError(t, err)
-
-		// add some blocks, but don't go to confirmation level
-		for i := uint64(1); i <= tracker.config.NumBlockConfirmations; i++ {
-			require.NoError(t, tracker.trackBlock(context.Background(),
-				&ethgo.Block{
-					Number:     i,
-					Hash:       ethgo.Hash{byte(i)},
-					ParentHash: ethgo.Hash{byte(i - 1)},
-				}))
-		}
-
-		// check that we have correct number of cached blocks
-		require.Len(t, tracker.blockContainer.blocks, int(tracker.config.NumBlockConfirmations))
-		require.Len(t, tracker.blockContainer.numToHashMap, int(tracker.config.NumBlockConfirmations))
-
-		// check that we have no confirmed blocks
-		require.Nil(t, tracker.blockContainer.GetConfirmedBlocks(tracker.config.NumBlockConfirmations))
-
-		// check that the last processed block is 0, since we did not have any confirmed blocks
-		require.Equal(t, uint64(0), tracker.blockContainer.LastProcessedBlockLocked())
-		lastProcessedBlockInStore, err := tracker.store.GetLastProcessedBlock()
-		require.NoError(t, err)
-		require.Equal(t, uint64(0), lastProcessedBlockInStore)
-
-		// check that the last cached block is as expected
-		require.Equal(t, tracker.config.NumBlockConfirmations, tracker.blockContainer.LastCachedBlock())
 	})
 
-	t.Run("Add block by block - have confirmed blocks - no logs in them - invalid subscriber", func(t *testing.T) {
+	t.Run("creates a default store when store is not provided", func(t *testing.T) {
 		t.Parallel()
 
-		numBlockConfirmations := uint64(3)
-
-		// mock logs return so that no confirmed block has any logs we need
-		blockProviderMock := new(mockProvider)
-		blockProviderMock.On("ChainID").Return(big.NewInt(1), nil).Once()
-		blockProviderMock.On("GetLogs", mock.Anything).Return([]*ethgo.Log{}, nil).Once()
-
-		// create a tracker with invalid subscriber
-		_, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
-			store.NewTestTrackerStore(t))
-		require.Error(t, err)
-		require.ErrorContains(t, err, "invalid configuration, event subscriber not set")
-	})
-
-	t.Run("Add block by block - have confirmed blocks - no logs in them", func(t *testing.T) {
-		t.Parallel()
-
-		numBlockConfirmations := uint64(3)
-		totalNumOfPreCachedBlocks := numBlockConfirmations + 1
-		numOfConfirmedBlocks := totalNumOfPreCachedBlocks - numBlockConfirmations + 1
-
-		// mock logs return so that no confirmed block has any logs we need
-		blockProviderMock := new(mockProvider)
-		blockProviderMock.On("GetLogs", mock.Anything).Return([]*ethgo.Log{}, nil).Once()
-
-		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, 10, 0, blockProviderMock),
-			store.NewTestTrackerStore(t))
-		require.NoError(t, err)
-
-		// add some blocks
-		var block *ethgo.Block
-		for i := uint64(1); i <= totalNumOfPreCachedBlocks; i++ {
-			block = &ethgo.Block{
-				Number:     i,
-				Hash:       ethgo.Hash{byte(i)},
-				ParentHash: ethgo.Hash{byte(i - 1)},
-			}
-			require.NoError(t, tracker.blockContainer.AddBlock(block))
-		}
-
-		// check that we have correct number of cached blocks
-		require.Len(t, tracker.blockContainer.blocks, int(totalNumOfPreCachedBlocks))
-		require.Len(t, tracker.blockContainer.numToHashMap, int(totalNumOfPreCachedBlocks))
-
-		// track new block
-		latestBlock := &ethgo.Block{
-			Number:     block.Number + 1,
-			Hash:       ethgo.Hash{byte(block.Number + 1)},
-			ParentHash: block.Hash,
-		}
-		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
-
-		// check if the last cached block is as expected
-		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
-		// check if the last confirmed block processed is as expected
-		require.Equal(t, numOfConfirmedBlocks, tracker.blockContainer.LastProcessedBlock())
-		// check if the last confirmed block is saved in db as well
-		lastProcessedConfirmedBlock, err := tracker.store.GetLastProcessedBlock()
-		require.NoError(t, err)
-		require.Equal(t, numOfConfirmedBlocks, lastProcessedConfirmedBlock)
-		// check that in memory cache removed processed confirmed logs
-		expectedNumOfBlocksInCache := totalNumOfPreCachedBlocks + 1 - numOfConfirmedBlocks
-		require.Len(t, tracker.blockContainer.blocks, int(expectedNumOfBlocksInCache))
-		require.Len(t, tracker.blockContainer.numToHashMap, int(expectedNumOfBlocksInCache))
-
-		for i := uint64(1); i <= numOfConfirmedBlocks; i++ {
-			_, exists := tracker.blockContainer.numToHashMap[i]
-			require.False(t, exists)
-			require.Equal(t, -1, tracker.blockContainer.indexOf(i))
-		}
-
-		blockProviderMock.AssertExpectations(t)
-	})
-
-	t.Run("Add block by block - have confirmed blocks with logs", func(t *testing.T) {
-		t.Parallel()
-
-		numBlockConfirmations := uint64(3)
-		totalNumOfPreCachedBlocks := numBlockConfirmations + 1
-		numOfConfirmedBlocks := totalNumOfPreCachedBlocks - numBlockConfirmations + 1
-
-		// mock logs return so that no confirmed block has any logs we need
-		logs := []*ethgo.Log{
-			store.CreateTestLogForStateSyncEvent(t, 1, 1),
-			store.CreateTestLogForStateSyncEvent(t, 1, 11),
-			store.CreateTestLogForStateSyncEvent(t, 2, 3),
-		}
-		blockProviderMock := new(mockProvider)
-		blockProviderMock.On("GetLogs", mock.Anything).Return(logs, nil).Once()
-
-		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, 10, 0, blockProviderMock),
-			store.NewTestTrackerStore(t))
-		require.NoError(t, err)
-
-		// add some blocks
-		var block *ethgo.Block
-		for i := uint64(1); i <= totalNumOfPreCachedBlocks; i++ {
-			block = &ethgo.Block{
-				Number:     i,
-				Hash:       ethgo.Hash{byte(i)},
-				ParentHash: ethgo.Hash{byte(i - 1)},
-			}
-			require.NoError(t, tracker.blockContainer.AddBlock(block))
-		}
-
-		// check that we have correct number of cached blocks
-		require.Len(t, tracker.blockContainer.blocks, int(totalNumOfPreCachedBlocks))
-		require.Len(t, tracker.blockContainer.numToHashMap, int(totalNumOfPreCachedBlocks))
-
-		// track new block
-		latestBlock := &ethgo.Block{
-			Number:     block.Number + 1,
-			Hash:       ethgo.Hash{byte(block.Number + 1)},
-			ParentHash: block.Hash,
-		}
-		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
-
-		// check if the last cached block is as expected
-		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
-		// check if the last confirmed block processed is as expected
-		require.Equal(t, numOfConfirmedBlocks, tracker.blockContainer.LastProcessedBlock())
-		// check if the last confirmed block is saved in db as well
-		lastProcessedConfirmedBlock, err := tracker.store.GetLastProcessedBlock()
-		require.NoError(t, err)
-		require.Equal(t, numOfConfirmedBlocks, lastProcessedConfirmedBlock)
-		// check if we have logs in store
-		for _, log := range logs {
-			logFromDB, err := tracker.store.GetLog(log.BlockNumber, log.LogIndex)
-			require.NoError(t, err)
-			require.Equal(t, log.Address, logFromDB.Address)
-			require.Equal(t, log.BlockNumber, log.BlockNumber)
-			require.Equal(t, log.LogIndex, logFromDB.LogIndex)
-		}
-		// check that in memory cache removed processed confirmed logs
-		expectedNumOfBlocksInCache := totalNumOfPreCachedBlocks + 1 - numOfConfirmedBlocks
-		require.Len(t, tracker.blockContainer.blocks, int(expectedNumOfBlocksInCache))
-		require.Len(t, tracker.blockContainer.numToHashMap, int(expectedNumOfBlocksInCache))
-
-		for i := uint64(1); i <= numOfConfirmedBlocks; i++ {
-			_, exists := tracker.blockContainer.numToHashMap[i]
-			require.False(t, exists)
-			require.Equal(t, -1, tracker.blockContainer.indexOf(i))
-		}
-
-		blockProviderMock.AssertExpectations(t)
-	})
-
-	t.Run("Add block by block - have confirmed blocks with logs - invalid subscriber", func(t *testing.T) {
-		t.Parallel()
-
-		numBlockConfirmations := uint64(3)
-
-		// mock logs return so that no confirmed block has any logs we need
-		logs := []*ethgo.Log{
-			store.CreateTestLogForStateSyncEvent(t, 1, 1),
-			store.CreateTestLogForStateSyncEvent(t, 1, 11),
-			store.CreateTestLogForStateSyncEvent(t, 2, 3),
-		}
-		blockProviderMock := new(mockProvider)
-		blockProviderMock.On("GetLogs", mock.Anything).Return(logs, nil).Once()
-
-		// create a tracker with invalid subscriber
-		_, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, numBlockConfirmations, 10, 0),
-			store.NewTestTrackerStore(t))
-		require.Error(t, err)
-		require.ErrorContains(t, err, "invalid configuration, event subscriber not set")
-	})
-
-	t.Run("Add block by block - an error occurs on getting logs", func(t *testing.T) {
-		t.Parallel()
-
-		numBlockConfirmations := uint64(3)
-		totalNumOfPreCachedBlocks := numBlockConfirmations + 1
-
-		// mock logs return so that no confirmed block has any logs we need
-		blockProviderMock := new(mockProvider)
-		blockProviderMock.On("GetLogs", mock.Anything).Return(nil, errors.New("some error occurred")).Once()
-
-		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, 10, 0, blockProviderMock),
-			store.NewTestTrackerStore(t))
-		require.NoError(t, err)
-
-		// add some blocks
-		var block *ethgo.Block
-		for i := uint64(1); i <= totalNumOfPreCachedBlocks; i++ {
-			block = &ethgo.Block{
-				Number:     i,
-				Hash:       ethgo.Hash{byte(i)},
-				ParentHash: ethgo.Hash{byte(i - 1)},
-			}
-			require.NoError(t, tracker.blockContainer.AddBlock(block))
-		}
-
-		// check that we have correct number of cached blocks
-		require.Len(t, tracker.blockContainer.blocks, int(totalNumOfPreCachedBlocks))
-		require.Len(t, tracker.blockContainer.numToHashMap, int(totalNumOfPreCachedBlocks))
-
-		// track new block
-		latestBlock := &ethgo.Block{
-			Number:     block.Number + 1,
-			Hash:       ethgo.Hash{byte(block.Number + 1)},
-			ParentHash: block.Hash,
-		}
-		require.ErrorContains(t, tracker.trackBlock(context.Background(), latestBlock), "some error occurred")
-
-		// check if the last cached block is as expected
-		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
-		// check if the last confirmed block processed is as expected, in this case 0, because an error occurred
-		require.Equal(t, uint64(0), tracker.blockContainer.LastProcessedBlock())
-		// check if the last confirmed block is saved in db as well
-		lastProcessedConfirmedBlock, err := tracker.store.GetLastProcessedBlock()
-		require.NoError(t, err)
-		require.Equal(t, uint64(0), lastProcessedConfirmedBlock)
-		// check that in memory cache nothing got removed, and that we have the latest block as well
-		expectedNumOfBlocksInCache := totalNumOfPreCachedBlocks + 1 // because of the latest block
-		require.Len(t, tracker.blockContainer.blocks, int(expectedNumOfBlocksInCache))
-		require.Len(t, tracker.blockContainer.numToHashMap, int(expectedNumOfBlocksInCache))
-
-		blockProviderMock.AssertExpectations(t)
-	})
-
-	t.Run("Starting tracker - sync up in batches", func(t *testing.T) {
-		t.Parallel()
-
-		batchSize := uint64(4)
-		numBlockConfirmations := uint64(3)
-		numOfMissedBlocks := batchSize * 2
-
-		blockProviderMock := &mockProvider{blocks: make(map[uint64]*ethgo.Block)}
-
-		// mock logs return so that no confirmed block has any logs we need
-		logs := []*ethgo.Log{
-			store.CreateTestLogForStateSyncEvent(t, 1, 1),
-			store.CreateTestLogForStateSyncEvent(t, 2, 3),
-			store.CreateTestLogForStateSyncEvent(t, 6, 11),
-		}
-		blockProviderMock.logs = logs
-		// we will have three groups of confirmed blocks
-		// syncing blocks: 1, 2, 3, 4, 5, 6, 7, 8, 9
-		// first batch of gotten blocks: 1, 2, 3, 4 - confirmed blocks: 1
-		// second batch of gotten blocks: 5, 6, 7, 8 - confirmed blocks: 2, 3, 4, 5
-		// process the latest block as well (block 9) - confirmed blocks: 6
-		// just mock the call, it will use the provider.logs map to handle proper returns
-		blockProviderMock.On("GetLogs", mock.Anything).Return(nil, nil).Times(len(logs))
-		// just mock the call, it will use the provider.blocks map to handle proper returns
-		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(int(numOfMissedBlocks))
-
-		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, blockProviderMock),
-			store.NewTestTrackerStore(t))
-		require.NoError(t, err)
-
-		// mock getting missed blocks
-		var block *ethgo.Block
-		for i := uint64(1); i <= numOfMissedBlocks; i++ {
-			block = &ethgo.Block{
-				Number:     i,
-				Hash:       ethgo.Hash{byte(i)},
-				ParentHash: ethgo.Hash{byte(i - 1)},
-			}
-			blockProviderMock.blocks[i] = block
-		}
-
-		// check that initially we don't have anything cached
-		require.Len(t, tracker.blockContainer.blocks, 0)
-		require.Len(t, tracker.blockContainer.numToHashMap, 0)
-
-		// track new block
-		latestBlock := &ethgo.Block{
-			Number:     block.Number + 1,
-			Hash:       ethgo.Hash{byte(block.Number + 1)},
-			ParentHash: block.Hash,
-		}
-		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
-
-		// check if the last cached block is as expected
-		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
-		// check if the last confirmed block processed is as expected
-		expectedLastProcessed := numOfMissedBlocks + 1 - numBlockConfirmations
-		require.Equal(t, expectedLastProcessed, tracker.blockContainer.LastProcessedBlock())
-		// check if the last confirmed block is saved in db as well
-		lastProcessedConfirmedBlock, err := tracker.store.GetLastProcessedBlock()
-		require.NoError(t, err)
-		require.Equal(t, expectedLastProcessed, lastProcessedConfirmedBlock)
-		// check if we have logs in store
-		logsFromDB, err := tracker.store.GetAllLogs()
-		require.NoError(t, err)
-		require.Len(t, logsFromDB, len(logs))
-
-		// check that in memory cache removed processed confirmed logs
-		require.Len(t, tracker.blockContainer.blocks, int(numOfMissedBlocks+1-expectedLastProcessed))
-		require.Len(t, tracker.blockContainer.numToHashMap, int(numOfMissedBlocks+1-expectedLastProcessed))
-
-		for i := expectedLastProcessed + 1; i <= numOfMissedBlocks+1; i++ {
-			_, exists := tracker.blockContainer.numToHashMap[i]
-			require.True(t, exists)
-			require.Equal(t, i, tracker.blockContainer.blocks[i-expectedLastProcessed-1])
-		}
-
-		blockProviderMock.AssertExpectations(t)
-	})
-
-	t.Run("Sync up in batches - have cached blocks - no reorgs", func(t *testing.T) {
-		t.Parallel()
-
-		batchSize := uint64(4)
-		numBlockConfirmations := uint64(3)
-		numOfMissedBlocks := batchSize * 4
-		numOfCachedBlocks := uint64(4)
-
-		blockProviderMock := &mockProvider{blocks: make(map[uint64]*ethgo.Block)}
-
-		// mock logs return so that no confirmed block has any logs we need
-		logs := []*ethgo.Log{
-			store.CreateTestLogForStateSyncEvent(t, 1, 1),
-			store.CreateTestLogForStateSyncEvent(t, 2, 3),
-			store.CreateTestLogForStateSyncEvent(t, 6, 11),
-			store.CreateTestLogForStateSyncEvent(t, 10, 1),
-		}
-		// we will have three groups of confirmed blocks
-		// have cached blocks, 1, 2, 3, 4
-		// cleans state
-		// syncing blocks: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
-		// first batch of gotten blocks: 1, 2, 3, 4 - confirmed blocks: 1
-		// second batch of gotten blocks: 5, 6, 7, 8 - confirmed blocks: 2, 3, 4, 5
-		// third batch of gotten blocks: 9, 10, 11, 12 - confirmed blocks: 6, 7, 8, 9
-		// process the latest block as well (block 13) - confirmed blocks: 10
-		// just mock the call, it will use the provider.logs map to handle proper returns
-		blockProviderMock.On("GetLogs", mock.Anything).Return(logs[0:1], nil).Once()
-		blockProviderMock.On("GetLogs", mock.Anything).Return(logs[1:2], nil).Once()
-		blockProviderMock.On("GetLogs", mock.Anything).Return(logs[2:3], nil).Once()
-		blockProviderMock.On("GetLogs", mock.Anything).Return(logs[3:], nil).Once()
-		blockProviderMock.On("GetLogs", mock.Anything).Return(nil, nil).Times(2)
-		// just mock the call, it will use the provider.blocks map to handle proper returns
-		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(
-			int(numOfMissedBlocks + numOfCachedBlocks))
-
-		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, blockProviderMock),
-			store.NewTestTrackerStore(t))
-		require.NoError(t, err)
-
-		var block *ethgo.Block
-
-		// add some cached blocks
-		for i := uint64(1); i <= numOfCachedBlocks; i++ {
-			block = &ethgo.Block{
-				Number:     i,
-				Hash:       ethgo.Hash{byte(i)},
-				ParentHash: ethgo.Hash{byte(i - 1)},
-			}
-
-			blockProviderMock.blocks[i] = block
-			require.NoError(t, tracker.blockContainer.AddBlock(block))
-		}
-
-		// check that initially we have some cached blocks
-		require.Len(t, tracker.blockContainer.blocks, int(numOfCachedBlocks))
-		require.Len(t, tracker.blockContainer.numToHashMap, int(numOfCachedBlocks))
-
-		// mock getting missed blocks
-		for i := numOfCachedBlocks + 1; i <= numOfMissedBlocks+numOfCachedBlocks; i++ {
-			block = &ethgo.Block{
-				Number:     i,
-				Hash:       ethgo.Hash{byte(i)},
-				ParentHash: ethgo.Hash{byte(i - 1)},
-			}
-			blockProviderMock.blocks[i] = block
-		}
-
-		// track new block
-		latestBlock := &ethgo.Block{
-			Number:     block.Number + 1,
-			Hash:       ethgo.Hash{byte(block.Number + 1)},
-			ParentHash: block.Hash,
-		}
-		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
-
-		// check if the last cached block is as expected
-		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
-		// check if the last confirmed block processed is as expected
-		expectedLastProcessed := numOfMissedBlocks + numOfCachedBlocks + 1 - numBlockConfirmations
-		require.Equal(t, expectedLastProcessed, tracker.blockContainer.LastProcessedBlock())
-		// check if the last confirmed block is saved in db as well
-		lastProcessedConfirmedBlock, err := tracker.store.GetLastProcessedBlock()
-		require.NoError(t, err)
-		require.Equal(t, expectedLastProcessed, lastProcessedConfirmedBlock)
-		// check if we have logs in store
-		logsFromDB, err := tracker.store.GetAllLogs()
-		require.NoError(t, err)
-		require.Len(t, logsFromDB, len(logs))
-
-		// check that in memory cache removed processed confirmed logs
-		expectedNumOfNonProcessedBlocks := int(numOfMissedBlocks + numOfCachedBlocks + 1 - expectedLastProcessed)
-		require.Len(t, tracker.blockContainer.blocks, expectedNumOfNonProcessedBlocks)
-		require.Len(t, tracker.blockContainer.numToHashMap, expectedNumOfNonProcessedBlocks)
-
-		for i := expectedLastProcessed + 1; i <= numOfMissedBlocks+1; i++ {
-			_, exists := tracker.blockContainer.numToHashMap[i]
-			require.True(t, exists)
-			require.Equal(t, i, tracker.blockContainer.blocks[i-expectedLastProcessed-1])
-		}
-
-		blockProviderMock.AssertExpectations(t)
-	})
-
-	t.Run("Sync up in batches - have cached blocks - a reorg happened", func(t *testing.T) {
-		t.Parallel()
-
-		batchSize := uint64(4)
-		numBlockConfirmations := uint64(3)
-		numOfCachedBlocks := uint64(4)
-
-		blockProviderMock := &mockProvider{blocks: make(map[uint64]*ethgo.Block)}
-
-		// mock logs return so that no confirmed block has any logs we need
-		logs := []*ethgo.Log{
-			store.CreateTestLogForStateSyncEvent(t, 1, 1),
-			store.CreateTestLogForStateSyncEvent(t, 2, 3),
-		}
-		blockProviderMock.logs = logs
-		// we will have 2 groups of confirmed blocks
-		// have cached blocks, 1, 2, 3, 4
-		// notice there was a reorg on block 5
-		// cleans state
-		// syncing blocks: 1, 2, 3, 4, 5
-		// first batch of gotten blocks: 1, 2, 3, 4 - confirmed blocks: 1
-		// process the latest block as well (block 5) - confirmed blocks: 2
-		// just mock the call, it will use the provider.logs map to handle proper returns
-		blockProviderMock.On("GetLogs", mock.Anything).Return(nil, nil).Times(len(logs))
-		// just mock the call, it will use the provider.blocks map to handle proper returns
-		blockProviderMock.On("GetBlockByNumber", mock.Anything, mock.Anything).Return(nil, nil).Times(int(numOfCachedBlocks))
-
-		tracker, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, blockProviderMock),
-			store.NewTestTrackerStore(t))
-		require.NoError(t, err)
-
-		var block *ethgo.Block
-
-		// add some cached blocks
-		for i := uint64(1); i <= numOfCachedBlocks; i++ {
-			block = &ethgo.Block{
-				Number:     i,
-				Hash:       ethgo.Hash{byte(i + numOfCachedBlocks)},
-				ParentHash: ethgo.Hash{byte(i + numOfCachedBlocks - 1)},
-			}
-			require.NoError(t, tracker.blockContainer.AddBlock(block))
-		}
-
-		// check that initially we have some cached blocks
-		require.Len(t, tracker.blockContainer.blocks, int(numOfCachedBlocks))
-		require.Len(t, tracker.blockContainer.numToHashMap, int(numOfCachedBlocks))
-
-		// mock getting new state
-		for i := uint64(1); i <= numOfCachedBlocks; i++ {
-			block = &ethgo.Block{
-				Number:     i,
-				Hash:       ethgo.Hash{byte(i)},
-				ParentHash: ethgo.Hash{byte(i - 1)},
-			}
-			blockProviderMock.blocks[i] = block
-		}
-
-		// track new block
-		latestBlock := &ethgo.Block{
-			Number:     block.Number + 1,
-			Hash:       ethgo.Hash{byte(block.Number + 1)},
-			ParentHash: block.Hash,
-		}
-		require.NoError(t, tracker.trackBlock(context.Background(), latestBlock))
-
-		// check if the last cached block is as expected
-		require.Equal(t, latestBlock.Number, tracker.blockContainer.LastCachedBlock())
-		// check if the last confirmed block processed is as expected
-		expectedLastProcessed := numOfCachedBlocks + 1 - numBlockConfirmations
-		require.Equal(t, expectedLastProcessed, tracker.blockContainer.LastProcessedBlock())
-		// check if the last confirmed block is saved in db as well
-		lastProcessedConfirmedBlock, err := tracker.store.GetLastProcessedBlock()
-		require.NoError(t, err)
-		require.Equal(t, expectedLastProcessed, lastProcessedConfirmedBlock)
-		// check if we have logs in store
-		logsFromDB, err := tracker.store.GetAllLogs()
-		require.NoError(t, err)
-		require.Len(t, logsFromDB, len(logs))
-
-		// check that in memory cache removed processed confirmed logs
-		expectedNumOfNonProcessedBlocks := int(numOfCachedBlocks + 1 - expectedLastProcessed)
-		require.Len(t, tracker.blockContainer.blocks, expectedNumOfNonProcessedBlocks)
-		require.Len(t, tracker.blockContainer.numToHashMap, expectedNumOfNonProcessedBlocks)
-
-		for i := expectedLastProcessed + 1; i <= numOfCachedBlocks+1; i++ {
-			_, exists := tracker.blockContainer.numToHashMap[i]
-			require.True(t, exists)
-			require.Equal(t, i, tracker.blockContainer.blocks[i-expectedLastProcessed-1])
-		}
-
-		blockProviderMock.AssertExpectations(t)
-	})
-
-	t.Run("Indexer is in the future", func(t *testing.T) {
-		t.Parallel()
-
-		const (
-			batchSize             = uint64(4)
-			numBlockConfirmations = uint64(3)
-			numOfCachedBlocks     = uint64(4)
-		)
-
-		config := createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, new(mockProvider))
-		config.StartBlockFromGenesis = 1000
-
-		tracker, err := NewEventTracker(config, store.NewTestTrackerStore(t))
-		require.NoError(t, err)
-
-		// mock getting new state
-		for i := uint64(1); i <= numOfCachedBlocks; i++ {
-			tracker.blockContainer.blocks = append(tracker.blockContainer.blocks, i)
-			tracker.blockContainer.numToHashMap[i] = ethgo.Hash{byte(i)}
-		}
-
-		for i := numOfCachedBlocks; i <= numOfCachedBlocks+2; i++ {
-			lastProcessedBlock := numOfCachedBlocks + 1 // on last iteration we test getNewState
-			if i == numOfCachedBlocks+2 {
-				lastProcessedBlock = i
-			}
-
-			tracker.blockContainer.lastProcessedConfirmedBlock = lastProcessedBlock
-
-			err = tracker.trackBlock(context.Background(), &ethgo.Block{
-				Number:     i,
-				Hash:       ethgo.Hash{byte(i)},
-				ParentHash: ethgo.Hash{byte(i - 1)},
-			})
-
-			require.NoError(t, err)
-			require.Equal(t, lastProcessedBlock, tracker.blockContainer.LastProcessedBlock())
-			require.Equal(t, numOfCachedBlocks, tracker.blockContainer.LastCachedBlock())
-		}
-	})
-
-	t.Run("Create a tracker - invalid/default store", func(t *testing.T) {
-		t.Parallel()
-
-		batchSize := uint64(4)
-		numBlockConfirmations := uint64(3)
-
-		_, err := NewEventTracker(createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, nil), nil)
+		_, err := NewEventTracker(createTestTrackerConfig(t, 3, 4, nil), nil)
 		require.NoError(t, err)
 
 		// Remove default.db file created during test
@@ -692,184 +119,512 @@ func TestEventTracker_TrackBlock(t *testing.T) {
 		}
 	})
 
-	t.Run("Create a tracker with invalid config", func(t *testing.T) {
+	t.Run("uses a default logger when logger is not set", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := NewEventTracker(nil, nil)
-		require.Error(t, err)
-		require.ErrorContains(t, err, "invalid configuration")
-	})
-
-	t.Run("Create a tracker with invalid config, missing logger", func(t *testing.T) {
-		t.Parallel()
-
-		batchSize := uint64(4)
-		numBlockConfirmations := uint64(3)
-
-		config := createTestTrackerConfig(t, numBlockConfirmations, batchSize, 0, nil)
+		config := createTestTrackerConfig(t, 3, 4, nil)
 		config.Logger = nil
 
 		_, err := NewEventTracker(config, store.NewTestTrackerStore(t))
 		require.NoError(t, err)
 	})
-}
 
-func TestGetBlockByNumber(t *testing.T) {
-	t.Parallel()
-
-	t.Run("returns error when provider returns nil block without error", func(t *testing.T) {
+	t.Run("returns error when config is not provided", func(t *testing.T) {
 		t.Parallel()
 
-		providerMock := new(mockProvider)
-		providerMock.On("GetBlockByNumber", ethgo.BlockNumber(42), false).Return(nil, nil).Once()
-
-		block, err := getBlockByNumber(providerMock, ethgo.BlockNumber(42))
-		require.Nil(t, block)
-		require.ErrorContains(t, err, "not found on the tracked chain")
-		providerMock.AssertExpectations(t)
+		_, err := NewEventTracker(nil, nil)
+		require.ErrorContains(t, err, "invalid configuration")
 	})
 
-	t.Run("propagates provider error", func(t *testing.T) {
+	t.Run("returns error when event subscriber is not set", func(t *testing.T) {
 		t.Parallel()
 
-		providerMock := new(mockProvider)
-		providerMock.On("GetBlockByNumber", ethgo.BlockNumber(7), false).
-			Return(nil, errors.New("rpc down")).Once()
-
-		block, err := getBlockByNumber(providerMock, ethgo.BlockNumber(7))
-		require.Nil(t, block)
-		require.ErrorContains(t, err, "rpc down")
-		providerMock.AssertExpectations(t)
+		_, err := NewEventTracker(createTestTrackerConfigInvalidSub(t, 3, 10),
+			store.NewTestTrackerStore(t))
+		require.ErrorContains(t, err, "invalid configuration, event subscriber not set")
 	})
 
-	t.Run("returns block when present", func(t *testing.T) {
+	t.Run("defaults to the block confirmations strategy", func(t *testing.T) {
 		t.Parallel()
 
-		expected := &ethgo.Block{Number: 3, Hash: ethgo.Hash{3}}
-		providerMock := new(mockProvider)
-		providerMock.On("GetBlockByNumber", ethgo.BlockNumber(3), false).Return(expected, nil).Once()
+		config := createTestTrackerConfig(t, 3, 4, nil)
 
-		block, err := getBlockByNumber(providerMock, ethgo.BlockNumber(3))
+		_, err := NewEventTracker(config, store.NewTestTrackerStore(t))
 		require.NoError(t, err)
-		require.Equal(t, expected, block)
-		providerMock.AssertExpectations(t)
+		require.Equal(t, ConfirmationStrategyNumBlockConfirmations, config.ConfirmationStrategy)
+	})
+
+	t.Run("creates a tracker with the finalized strategy", func(t *testing.T) {
+		t.Parallel()
+
+		config := createTestTrackerConfig(t, 3, 4, nil)
+		config.ConfirmationStrategy = ConfirmationStrategyFinalized
+
+		_, err := NewEventTracker(config, store.NewTestTrackerStore(t))
+		require.NoError(t, err)
+	})
+
+	t.Run("returns error for an unknown confirmation strategy", func(t *testing.T) {
+		t.Parallel()
+
+		config := createTestTrackerConfig(t, 3, 4, nil)
+		config.ConfirmationStrategy = "latest"
+
+		_, err := NewEventTracker(config, store.NewTestTrackerStore(t))
+		require.ErrorContains(t, err, "unknown confirmation strategy: latest")
+	})
+
+	t.Run("returns error when sync batch size is zero", func(t *testing.T) {
+		t.Parallel()
+
+		config := createTestTrackerConfig(t, 3, 0, nil)
+
+		_, err := NewEventTracker(config, store.NewTestTrackerStore(t))
+		require.ErrorContains(t, err, "sync batch size must be greater than zero")
 	})
 }
 
-func TestEventTracker_GetNewState_NilLatestBlock(t *testing.T) {
+func TestEventTracker_ProcessAvailableLogs(t *testing.T) {
 	t.Parallel()
 
-	eventTracker := &EventTracker{
-		config: &EventTrackerConfig{
-			NumBlockConfirmations: 3,
-			SyncBatchSize:         5,
-			Logger:                hclog.NewNullLogger(),
-			BlockProvider:         new(mockProvider),
-		},
-		blockContainer: NewTrackerBlockContainer(0),
-		store:          store.NewTestTrackerStore(t),
+	provider := new(mockProvider)
+	config := createTestTrackerConfig(t, 3, 4, provider)
+
+	trackerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, trackerStore.InsertLastProcessedBlock(90))
+
+	provider.On("BlockNumber").Return(uint64(105), nil).Once()
+
+	provider.On("GetLogs", mock.MatchedBy(matchesLogRange(91, 94))).Return([]*ethgo.Log{}, nil).Once()
+	provider.On("GetLogs", mock.MatchedBy(matchesLogRange(95, 98))).Return([]*ethgo.Log{}, nil).Once()
+	provider.On("GetLogs", mock.MatchedBy(matchesLogRange(99, 102))).Return([]*ethgo.Log{}, nil).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	require.NoError(t, eventTracker.processAvailableLogs(context.Background()))
+
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(102), lastProcessedBlock)
+
+	provider.AssertNotCalled(t, "GetBlockByNumber", mock.Anything, mock.Anything)
+	provider.AssertExpectations(t)
+}
+
+func TestEventTracker_ProcessAvailableLogs_InsufficientChainHeight(t *testing.T) {
+	t.Parallel()
+
+	provider := new(mockProvider)
+	config := createTestTrackerConfig(t, 3, 4, provider)
+
+	trackerStore := store.NewTestTrackerStore(t)
+
+	provider.On("BlockNumber").Return(uint64(3), nil).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	require.NoError(t, eventTracker.processAvailableLogs(context.Background()))
+
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), lastProcessedBlock)
+
+	provider.AssertNotCalled(t, "GetLogs", mock.Anything)
+	provider.AssertExpectations(t)
+}
+
+func TestEventTracker_ProcessAvailableLogs_StartBlockFromGenesis(t *testing.T) {
+	t.Parallel()
+
+	provider := new(mockProvider)
+	config := createTestTrackerConfig(t, 3, 10, provider)
+	config.StartBlockFromGenesis = 50
+
+	trackerStore := store.NewTestTrackerStore(t)
+
+	provider.On("BlockNumber").Return(uint64(58), nil).Once()
+	provider.On("GetLogs", mock.MatchedBy(matchesLogRange(51, 55))).
+		Return([]*ethgo.Log{}, nil).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	require.NoError(t, eventTracker.processAvailableLogs(context.Background()))
+
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(55), lastProcessedBlock)
+
+	provider.AssertExpectations(t)
+}
+
+func TestEventTracker_ProcessAvailableLogs_Finalized(t *testing.T) {
+	t.Parallel()
+
+	provider := new(mockProvider)
+	config := createTestTrackerConfig(t, 3, 10, provider)
+	config.ConfirmationStrategy = ConfirmationStrategyFinalized
+
+	trackerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, trackerStore.InsertLastProcessedBlock(100))
+
+	provider.On("GetBlockByNumber", ethgo.Finalized, false).
+		Return(&ethgo.Block{Number: 105}, nil).Once()
+	provider.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 105))).
+		Return([]*ethgo.Log{}, nil).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	require.NoError(t, eventTracker.processAvailableLogs(context.Background()))
+
+	// NumBlockConfirmations is not applied on top of a finalized block
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(105), lastProcessedBlock)
+
+	provider.AssertNotCalled(t, "BlockNumber")
+	provider.AssertExpectations(t)
+}
+
+func TestEventTracker_ProcessAvailableLogs_FinalizedNotSupported(t *testing.T) {
+	t.Parallel()
+
+	provider := new(mockProvider)
+	config := createTestTrackerConfig(t, 3, 10, provider)
+	config.ConfirmationStrategy = ConfirmationStrategyFinalized
+
+	trackerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, trackerStore.InsertLastProcessedBlock(100))
+
+	// a node that does not support the tag answers with a null block and no error
+	provider.On("GetBlockByNumber", ethgo.Finalized, false).Return(nil, nil).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	require.ErrorContains(t, eventTracker.processAvailableLogs(context.Background()),
+		"block finalized not found on the tracked chain")
+
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), lastProcessedBlock)
+
+	provider.AssertNotCalled(t, "GetLogs", mock.Anything)
+	provider.AssertExpectations(t)
+}
+
+func TestEventTracker_ProcessAvailableLogs_BlockNumberError(t *testing.T) {
+	t.Parallel()
+
+	provider := new(mockProvider)
+	config := createTestTrackerConfig(t, 3, 4, provider)
+
+	trackerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, trackerStore.InsertLastProcessedBlock(90))
+
+	provider.On("BlockNumber").Return(uint64(0), errors.New("rpc down")).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	require.ErrorContains(t, eventTracker.processAvailableLogs(context.Background()), "rpc down")
+
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(90), lastProcessedBlock)
+
+	provider.AssertNotCalled(t, "GetLogs", mock.Anything)
+	provider.AssertExpectations(t)
+}
+
+func TestEventTracker_ProcessLogsRange_EmptyRangeAdvancesCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	providerMock := new(mockProvider)
+	config := createTestTrackerConfig(t, 3, 20, providerMock)
+
+	trackerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, trackerStore.InsertLastProcessedBlock(100))
+
+	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 120))).
+		Return([]*ethgo.Log{}, nil).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	require.NoError(t, eventTracker.processLogsRange(101, 120))
+
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(120), lastProcessedBlock)
+
+	logs, err := trackerStore.GetAllLogs()
+	require.NoError(t, err)
+	require.Empty(t, logs)
+
+	providerMock.AssertExpectations(t)
+}
+
+func TestEventTracker_ProcessLogsRange_GetLogsErrorDoesNotAdvanceCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	providerMock := new(mockProvider)
+	config := createTestTrackerConfig(t, 3, 20, providerMock)
+
+	trackerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, trackerStore.InsertLastProcessedBlock(100))
+
+	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 120))).
+		Return(nil, errors.New("rpc down")).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	require.ErrorContains(t, eventTracker.processLogsRange(101, 120), "rpc down")
+
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), lastProcessedBlock)
+
+	providerMock.AssertExpectations(t)
+}
+
+func TestEventTracker_ProcessLogsRange_SubscriberErrorDoesNotAdvanceCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	providerMock := new(mockProvider)
+	subscriber := &mockEventSubscriber{addLogErrors: []error{errors.New("subscriber unavailable")}}
+	config := createTestTrackerConfig(t, 3, 20, providerMock)
+	config.EventSubscriber = subscriber
+
+	trackerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, trackerStore.InsertLastProcessedBlock(100))
+
+	log := store.CreateTestLogForStateSyncEvent(t, 101, 0)
+	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 120))).
+		Return([]*ethgo.Log{log}, nil).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	err = eventTracker.processLogsRange(101, 120)
+	require.ErrorContains(t, err, "subscriber unavailable")
+
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), lastProcessedBlock)
+
+	logs, err := trackerStore.GetAllLogs()
+	require.NoError(t, err)
+	require.Empty(t, logs)
+
+	providerMock.AssertExpectations(t)
+}
+
+func TestEventTracker_ProcessLogsRange_RetrySkipsPreviouslyPublishedLogs(t *testing.T) {
+	t.Parallel()
+
+	providerMock := new(mockProvider)
+	subscriber := &mockEventSubscriber{
+		addLogErrors: []error{nil, errors.New("subscriber unavailable")},
 	}
+	config := createTestTrackerConfig(t, 3, 20, providerMock)
+	config.EventSubscriber = subscriber
 
-	require.ErrorContains(t, eventTracker.getNewState(context.Background(), nil), "latest block is nil")
+	trackerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, trackerStore.InsertLastProcessedBlock(100))
+
+	firstLog := store.CreateTestLogForStateSyncEvent(t, 101, 0)
+	firstLog.BlockHash = ethgo.Hash{1}
+	firstLog.TransactionHash = ethgo.Hash{2}
+	secondLog := store.CreateTestLogForStateSyncEvent(t, 102, 0)
+	secondLog.BlockHash = ethgo.Hash{3}
+	secondLog.TransactionHash = ethgo.Hash{4}
+	logs := []*ethgo.Log{firstLog, secondLog}
+
+	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 120))).
+		Return(logs, nil).Twice()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	err = eventTracker.processLogsRange(101, 120)
+	require.ErrorContains(t, err, "subscriber unavailable")
+	require.Len(t, subscriber.logs, 1)
+
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), lastProcessedBlock)
+
+	require.NoError(t, eventTracker.processLogsRange(101, 120))
+	require.Len(t, subscriber.logs, 2)
+
+	lastProcessedBlock, err = trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(120), lastProcessedBlock)
+
+	storedLogs, err := trackerStore.GetAllLogs()
+	require.NoError(t, err)
+	require.Len(t, storedLogs, 2)
+
+	providerMock.AssertExpectations(t)
 }
 
-func TestEventTracker_GetNewState_NilBlockFromProvider(t *testing.T) {
+func TestEventTracker_ProcessLogsRange_DeduplicatesRPCLogs(t *testing.T) {
 	t.Parallel()
 
-	t.Run("sync up from first block", func(t *testing.T) {
-		t.Parallel()
+	providerMock := new(mockProvider)
+	subscriber := new(mockEventSubscriber)
+	config := createTestTrackerConfig(t, 3, 20, providerMock)
+	config.EventSubscriber = subscriber
 
-		// Gap must exceed max(confirmations, maxBlockGapForLatestSync) to take FromFirst.
-		providerMock := new(mockProvider)
-		providerMock.On("GetBlockByNumber", ethgo.BlockNumber(1), false).Return(nil, nil).Once()
+	trackerStore := store.NewTestTrackerStore(t)
+	firstLog := store.CreateTestLogForStateSyncEvent(t, 101, 0)
+	firstLog.BlockHash = ethgo.Hash{1}
+	firstLog.TransactionHash = ethgo.Hash{2}
+	secondLog := store.CreateTestLogForStateSyncEvent(t, 101, 1)
+	secondLog.BlockHash = firstLog.BlockHash
+	secondLog.TransactionHash = firstLog.TransactionHash
 
-		eventTracker := &EventTracker{
-			config: &EventTrackerConfig{
-				NumBlockConfirmations: 3,
-				SyncBatchSize:         4,
-				Logger:                hclog.NewNullLogger(),
-				BlockProvider:         providerMock,
-			},
-			blockContainer: NewTrackerBlockContainer(0),
-			store:          store.NewTestTrackerStore(t),
-		}
+	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 120))).
+		Return([]*ethgo.Log{firstLog, firstLog, secondLog}, nil).Once()
 
-		err := eventTracker.getNewState(context.Background(), &ethgo.Block{
-			Number: 20,
-			Hash:   ethgo.Hash{20},
-		})
-		require.ErrorContains(t, err, "not found on the tracked chain")
-		providerMock.AssertExpectations(t)
-	})
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
 
-	t.Run("sync up from latest block", func(t *testing.T) {
-		t.Parallel()
+	require.NoError(t, eventTracker.processLogsRange(101, 120))
+	require.Len(t, subscriber.logs, 2)
 
-		providerMock := new(mockProvider)
-		// FromLatest walks downward from latest-1; first RPC call is for block 9.
-		providerMock.On("GetBlockByNumber", ethgo.BlockNumber(9), false).Return(nil, nil).Once()
+	logs, err := trackerStore.GetAllLogs()
+	require.NoError(t, err)
+	require.Len(t, logs, 2)
 
-		eventTracker := &EventTracker{
-			config: &EventTrackerConfig{
-				NumBlockConfirmations: 3,
-				SyncBatchSize:         4,
-				Logger:                hclog.NewNullLogger(),
-				BlockProvider:         providerMock,
-			},
-			blockContainer: NewTrackerBlockContainer(5),
-			store:          store.NewTestTrackerStore(t),
-		}
+	providerMock.AssertExpectations(t)
+}
 
-		err := eventTracker.getNewState(context.Background(), &ethgo.Block{
-			Number:     10,
-			Hash:       ethgo.Hash{10},
-			ParentHash: ethgo.Hash{9},
-		})
-		require.ErrorContains(t, err, "not found on the tracked chain")
-		providerMock.AssertExpectations(t)
-	})
+func TestEventTracker_ProcessLogsRange_SkipsPersistedLog(t *testing.T) {
+	t.Parallel()
+
+	providerMock := new(mockProvider)
+	subscriber := new(mockEventSubscriber)
+	config := createTestTrackerConfig(t, 3, 20, providerMock)
+	config.EventSubscriber = subscriber
+
+	trackerStore := store.NewTestTrackerStore(t)
+	log := store.CreateTestLogForStateSyncEvent(t, 101, 0)
+	require.NoError(t, trackerStore.InsertLogs([]*ethgo.Log{log}))
+	require.NoError(t, trackerStore.InsertLastProcessedBlock(100))
+
+	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 120))).
+		Return([]*ethgo.Log{log}, nil).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	require.NoError(t, eventTracker.processLogsRange(101, 120))
+	require.Empty(t, subscriber.logs)
+
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(120), lastProcessedBlock)
+
+	providerMock.AssertExpectations(t)
+}
+
+// TestEventTracker_ProcessAvailableLogs_ResumesFromOldCheckpoint guards the promise
+// that a tracker which was down for a long time resumes from the block right after
+// its checkpoint, without any window that would silently skip confirmed blocks.
+func TestEventTracker_ProcessAvailableLogs_ResumesFromOldCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	providerMock := new(mockProvider)
+	config := createTestTrackerConfig(t, 3, 30, providerMock)
+
+	trackerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, trackerStore.InsertLastProcessedBlock(50))
+
+	providerMock.On("BlockNumber").Return(uint64(105), nil).Once()
+	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(51, 80))).
+		Return([]*ethgo.Log{}, nil).Once()
+	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(81, 102))).
+		Return([]*ethgo.Log{}, nil).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	require.NoError(t, eventTracker.processAvailableLogs(context.Background()))
+
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(102), lastProcessedBlock)
+
+	providerMock.AssertExpectations(t)
+}
+
+func TestEventTracker_TrackLogs_StopsOnCancelledContext(t *testing.T) {
+	t.Parallel()
+
+	providerMock := new(mockProvider)
+	config := createTestTrackerConfig(t, 3, 4, providerMock)
+
+	trackerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, trackerStore.InsertLastProcessedBlock(100))
+
+	providerMock.On("BlockNumber").Return(uint64(101), nil).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.ErrorIs(t, eventTracker.trackLogs(ctx), context.Canceled)
+
+	providerMock.AssertExpectations(t)
 }
 
 func createTestTrackerConfig(t *testing.T,
-	numBlockConfirmations, batchSize, numOfBlocksToReconcile uint64, blockProviderMock *mockProvider) *EventTrackerConfig {
+	numBlockConfirmations, batchSize uint64,
+	providerMock *mockProvider) *EventTrackerConfig {
 	t.Helper()
 
-	if blockProviderMock == nil {
-		blockProviderMock = new(mockProvider)
+	if providerMock == nil {
+		providerMock = new(mockProvider)
 	}
 
-	blockProviderMock.On("ChainID").Return(big.NewInt(1), nil).Once()
+	providerMock.On("ChainID").Return(big.NewInt(1), nil).Once()
 
 	return &EventTrackerConfig{
-		RPCEndpoint:            "http://some-rpc-url.com",
-		NumBlockConfirmations:  numBlockConfirmations,
-		SyncBatchSize:          batchSize,
-		NumOfBlocksToReconcile: numOfBlocksToReconcile,
-		PollInterval:           2 * time.Second,
-		Logger:                 hclog.NewNullLogger(),
+		RPCEndpoint:           "http://some-rpc-url.com",
+		NumBlockConfirmations: numBlockConfirmations,
+		SyncBatchSize:         batchSize,
+		PollInterval:          2 * time.Second,
+		Logger:                hclog.NewNullLogger(),
 		LogFilter: map[ethgo.Address][]ethgo.Hash{
 			ethgo.ZeroAddress: {store.StateSyncEventABI.ID()},
 		},
 		EventSubscriber: new(mockEventSubscriber),
-		BlockProvider:   blockProviderMock,
+		Provider:        providerMock,
 	}
 }
 
 func createTestTrackerConfigInvalidSub(t *testing.T,
-	numBlockConfirmations, batchSize, numOfBlocksToReconcile uint64) *EventTrackerConfig {
+	numBlockConfirmations, batchSize uint64) *EventTrackerConfig {
 	t.Helper()
 
 	return &EventTrackerConfig{
-		RPCEndpoint:            "http://some-rpc-url.com",
-		NumBlockConfirmations:  numBlockConfirmations,
-		SyncBatchSize:          batchSize,
-		NumOfBlocksToReconcile: numOfBlocksToReconcile,
-		PollInterval:           2 * time.Second,
-		Logger:                 hclog.NewNullLogger(),
+		RPCEndpoint:           "http://some-rpc-url.com",
+		NumBlockConfirmations: numBlockConfirmations,
+		SyncBatchSize:         batchSize,
+		PollInterval:          2 * time.Second,
+		Logger:                hclog.NewNullLogger(),
 		LogFilter: map[ethgo.Address][]ethgo.Hash{
 			ethgo.ZeroAddress: {store.StateSyncEventABI.ID()},
 		},
 		EventSubscriber: nil,
-		BlockProvider:   new(mockProvider),
+		Provider:        new(mockProvider),
 	}
 }
