@@ -99,6 +99,7 @@ func TestEventTrackerStore_WritesLegacyLayout(t *testing.T) {
 		require.NotNil(t, raw)
 
 		var storedLog ethgo.Log
+
 		require.NoError(t, json.Unmarshal(raw, &storedLog))
 		require.Equal(t, log.BlockNumber, storedLog.BlockNumber)
 		require.Equal(t, log.LogIndex, storedLog.LogIndex)

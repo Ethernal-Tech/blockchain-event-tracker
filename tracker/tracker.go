@@ -381,12 +381,14 @@ func (e *EventTracker) processLogsRange(fromBlock, toBlock uint64) error {
 				if _, seen := seenLogs[identity]; seen {
 					break
 				}
+
 				seenLogs[identity] = struct{}{}
 
 				storedLog, err := e.store.GetLog(log.BlockNumber, log.LogIndex)
 				if err != nil {
 					return fmt.Errorf("could not check whether log was already processed: %w", err)
 				}
+
 				if storedLog != nil && getLogIdentity(storedLog) == identity {
 					break
 				}
