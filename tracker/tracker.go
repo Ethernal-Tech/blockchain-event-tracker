@@ -397,17 +397,13 @@ func (e *EventTracker) processLogsRange(fromBlock, toBlock uint64) error {
 					e.config.Logger.Error("An error occurred while passing event log to subscriber",
 						"err", err)
 
-					// Keep successfully published logs durable without advancing
-					// the checkpoint. A retry can then skip them and resume with
-					// the log that failed.
-					if persistErr := e.store.InsertLogs(filteredLogs); persistErr != nil {
-						return fmt.Errorf(
-							"could not pass event log to subscriber: %w; "+
-								"could not persist previously published logs: %v",
-							err, persistErr)
-					}
-
 					return fmt.Errorf("could not pass event log to subscriber: %w", err)
+				}
+
+				// Persist each published log immediately so a crash before the
+				// checkpoint write does not replay AddLog for logs already delivered.
+				if err := e.store.InsertLogs([]*ethgo.Log{log}); err != nil {
+					return fmt.Errorf("could not persist published log: %w", err)
 				}
 
 				filteredLogs = append(filteredLogs, log)
@@ -417,8 +413,10 @@ func (e *EventTracker) processLogsRange(fromBlock, toBlock uint64) error {
 		}
 	}
 
-	if err := e.store.InsertLogsAndLastProcessedBlock(filteredLogs, toBlock); err != nil {
-		e.config.Logger.Error("Process logs failed on saving logs and last processed block",
+	// Logs are already persisted one by one, so only the checkpoint is left. It moves
+	// once the whole step is done, so a block is never seen as complete with logs missing.
+	if err := e.store.InsertLastProcessedBlock(toBlock); err != nil {
+		e.config.Logger.Error("Process logs failed on saving last processed block",
 			"fromBlock", fromBlock,
 			"toBlock", toBlock,
 			"err", err)

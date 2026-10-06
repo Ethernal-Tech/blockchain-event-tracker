@@ -33,8 +33,8 @@ On every poll interval the tracker performs one cycle:
 2. It reads the last processed block from the store. That value is the checkpoint, and it means that logs up to and including that block were already delivered.
 3. If the checkpoint already reached `confirmedTo`, the cycle ends here.
 4. Otherwise it walks the range from `checkpoint + 1` to `confirmedTo` in steps of `SyncBatchSize`, spending one `eth_getLogs` call per step.
-5. For every log that matches `LogFilter`, it skips duplicates inside the same rpc response, skips logs the store already holds, and hands the rest to `EventSubscriber`.
-6. It then writes the logs of that step and the new checkpoint in a single database transaction, and moves to the next step.
+5. For every log that matches `LogFilter`, it skips duplicates inside the same rpc response, skips logs the store already holds, and hands the rest to `EventSubscriber`. Each accepted log is written to the store immediately after `AddLog` returns.
+6. Once every log of the step is stored, it writes the new checkpoint and moves to the next step. The checkpoint never moves per log, so a block below the checkpoint always has all of its logs in the store.
 
 `ConfirmationStrategy` chooses how step one computes the boundary:
 
@@ -63,7 +63,7 @@ Once it is caught up, a cycle costs two rpc calls: one for the boundary and one 
 
 - **It does not look above the boundary.** Logs from more recent blocks are not read at all, so the delivery always lags the head by at least the configured confirmations.
 
-- **It does not guarantee exactly once delivery.** The tracker recognizes an already delivered log by its block hash, transaction hash and log index, and skips it. That covers a restart and a retry after a failing subscriber. It does not cover the case where the subscriber accepted the logs of a batch and the database write then failed, because such a batch is retried whole. Your `EventSubscriber` has to tolerate seeing the same log twice.
+- **It does not guarantee exactly once delivery.** The tracker recognizes an already delivered log by its block hash, transaction hash and log index, and skips it. That covers a restart after a published log was stored, and a retry after a failing subscriber. A crash between a successful `AddLog` and the store write of that one log can still deliver it twice. Your `EventSubscriber` has to tolerate seeing the same log twice.
 
 ### Prerequisites
 
@@ -148,7 +148,7 @@ For every tracked event, this method is called on `EventSubscriber` to handle it
     eventTracker.config.EventSubscriber.AddLog(chainID, log)
 ```
 
-If `AddLog` returns an error, the checkpoint is not advanced, the logs accepted so far are still stored, and the batch is retried, skipping what was already delivered. Every delivered log is also saved in the store, so your application can query it later.
+If `AddLog` returns an error, the checkpoint is not advanced. Logs whose `AddLog` already succeeded are stored immediately, and the batch is retried, skipping what was already delivered. The checkpoint moves only after the whole step is done.
 
 ## The database
 

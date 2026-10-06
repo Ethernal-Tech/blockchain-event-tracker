@@ -534,9 +534,190 @@ func TestEventTracker_ProcessLogsRange_SkipsPersistedLog(t *testing.T) {
 	providerMock.AssertExpectations(t)
 }
 
+type persistCrashStore struct {
+	store.EventTrackerStore
+	failInsertLogs bool
+	failCheckpoint bool
+}
+
+func (s *persistCrashStore) InsertLogs(logs []*ethgo.Log) error {
+	if s.failInsertLogs {
+		return errors.New("simulated crash after AddLog")
+	}
+
+	return s.EventTrackerStore.InsertLogs(logs)
+}
+
+func (s *persistCrashStore) InsertLastProcessedBlock(blockNumber uint64) error {
+	if s.failCheckpoint {
+		return errors.New("simulated crash before checkpoint")
+	}
+
+	return s.EventTrackerStore.InsertLastProcessedBlock(blockNumber)
+}
+
+func TestEventTracker_ProcessLogsRange_CrashBeforeCheckpointDoesNotReplayPersistedLog(t *testing.T) {
+	t.Parallel()
+
+	providerMock := new(mockProvider)
+	subscriber := new(mockEventSubscriber)
+	config := createTestTrackerConfig(t, 3, 20, providerMock)
+	config.EventSubscriber = subscriber
+
+	innerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, innerStore.InsertLastProcessedBlock(100))
+
+	crashStore := &persistCrashStore{EventTrackerStore: innerStore, failCheckpoint: true}
+
+	log := store.CreateTestLogForStateSyncEvent(t, 101, 0)
+	log.BlockHash = ethgo.Hash{1}
+	log.TransactionHash = ethgo.Hash{2}
+
+	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 120))).
+		Return([]*ethgo.Log{log}, nil).Twice()
+
+	eventTracker, err := NewEventTracker(config, crashStore)
+	require.NoError(t, err)
+
+	err = eventTracker.processLogsRange(101, 120)
+	require.ErrorContains(t, err, "simulated crash before checkpoint")
+	require.Len(t, subscriber.logs, 1)
+
+	lastProcessedBlock, err := innerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), lastProcessedBlock)
+
+	storedLogs, err := innerStore.GetAllLogs()
+	require.NoError(t, err)
+	require.Len(t, storedLogs, 1)
+
+	crashStore.failCheckpoint = false
+
+	require.NoError(t, eventTracker.processLogsRange(101, 120))
+	require.Len(t, subscriber.logs, 1)
+
+	lastProcessedBlock, err = innerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(120), lastProcessedBlock)
+
+	providerMock.AssertExpectations(t)
+}
+
+func TestEventTracker_ProcessLogsRange_CrashBetweenAddLogAndInsertLogsReplaysAddLog(t *testing.T) {
+	t.Parallel()
+
+	providerMock := new(mockProvider)
+	subscriber := new(mockEventSubscriber)
+	config := createTestTrackerConfig(t, 3, 20, providerMock)
+	config.EventSubscriber = subscriber
+
+	innerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, innerStore.InsertLastProcessedBlock(100))
+
+	crashStore := &persistCrashStore{EventTrackerStore: innerStore, failInsertLogs: true}
+
+	log := store.CreateTestLogForStateSyncEvent(t, 101, 0)
+	log.BlockHash = ethgo.Hash{1}
+	log.TransactionHash = ethgo.Hash{2}
+
+	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 120))).
+		Return([]*ethgo.Log{log}, nil).Twice()
+
+	eventTracker, err := NewEventTracker(config, crashStore)
+	require.NoError(t, err)
+
+	err = eventTracker.processLogsRange(101, 120)
+	require.ErrorContains(t, err, "simulated crash after AddLog")
+	require.Len(t, subscriber.logs, 1)
+
+	storedLogs, err := innerStore.GetAllLogs()
+	require.NoError(t, err)
+	require.Empty(t, storedLogs)
+
+	crashStore.failInsertLogs = false
+
+	require.NoError(t, eventTracker.processLogsRange(101, 120))
+	require.Len(t, subscriber.logs, 2)
+
+	providerMock.AssertExpectations(t)
+}
+
 // TestEventTracker_ProcessAvailableLogs_ResumesFromOldCheckpoint guards the promise
 // that a tracker which was down for a long time resumes from the block right after
 // its checkpoint, without any window that would silently skip confirmed blocks.
+// checkpointFailingStore fails the first checkpoint writes while the tracker keeps running,
+// e.g. a full disk or an I/O error that later clears up.
+type checkpointFailingStore struct {
+	store.EventTrackerStore
+	failuresLeft int
+}
+
+func (s *checkpointFailingStore) InsertLastProcessedBlock(blockNumber uint64) error {
+	if s.failuresLeft > 0 {
+		s.failuresLeft--
+
+		return errors.New("simulated checkpoint write failure")
+	}
+
+	return s.EventTrackerStore.InsertLastProcessedBlock(blockNumber)
+}
+
+func TestEventTracker_Start_FailedCheckpointWriteDoesNotRedeliverLogs(t *testing.T) {
+	t.Parallel()
+
+	providerMock := new(mockProvider)
+	subscriber := new(mockEventSubscriber)
+	config := createTestTrackerConfig(t, 3, 20, providerMock)
+	config.EventSubscriber = subscriber
+
+	innerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, innerStore.InsertLastProcessedBlock(100))
+
+	failingStore := &checkpointFailingStore{EventTrackerStore: innerStore, failuresLeft: 1}
+
+	firstLog := store.CreateTestLogForStateSyncEvent(t, 101, 0)
+	firstLog.BlockHash = ethgo.Hash{1}
+	firstLog.TransactionHash = ethgo.Hash{2}
+
+	secondLog := store.CreateTestLogForStateSyncEvent(t, 105, 3)
+	secondLog.BlockHash = ethgo.Hash{3}
+	secondLog.TransactionHash = ethgo.Hash{4}
+
+	providerMock.On("BlockNumber").Return(uint64(123), nil)
+	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 120))).
+		Return([]*ethgo.Log{firstLog, secondLog}, nil)
+
+	eventTracker, err := NewEventTracker(config, failingStore)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		eventTracker.Start(ctx)
+	}()
+
+	// RetryForever retries the whole cycle after a second, so the same batch is fetched again
+	require.Eventually(t, func() bool {
+		lastProcessedBlock, err := innerStore.GetLastProcessedBlock()
+
+		return err == nil && lastProcessedBlock == 120
+	}, 5*time.Second, 50*time.Millisecond)
+
+	cancel()
+	<-done
+
+	providerMock.AssertNumberOfCalls(t, "GetLogs", 2)
+	require.Equal(t, 2, subscriber.addLogCalls)
+	require.Equal(t, []*ethgo.Log{firstLog, secondLog}, subscriber.logs)
+
+	storedLogs, err := innerStore.GetAllLogs()
+	require.NoError(t, err)
+	require.Len(t, storedLogs, 2)
+}
+
 func TestEventTracker_ProcessAvailableLogs_ResumesFromOldCheckpoint(t *testing.T) {
 	t.Parallel()
 

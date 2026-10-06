@@ -20,7 +20,6 @@ type EventTrackerStore interface {
 	GetLastProcessedBlock() (uint64, error)
 	InsertLastProcessedBlock(blockNumber uint64) error
 	InsertLogs(logs []*ethgo.Log) error
-	InsertLogsAndLastProcessedBlock(logs []*ethgo.Log, blockNumber uint64) error
 	GetLogsByBlockNumber(blockNumber uint64) ([]*ethgo.Log, error)
 	GetLog(blockNumber, logIndex uint64) (*ethgo.Log, error)
 	GetAllLogs() ([]*ethgo.Log, error)
@@ -139,22 +138,6 @@ func (p *BoltDBEventTrackerStore) InsertLastProcessedBlock(lastProcessedBlockNum
 func (p *BoltDBEventTrackerStore) InsertLogs(logs []*ethgo.Log) error {
 	return p.db.Update(func(tx *bolt.Tx) error {
 		return insertLogs(tx, logs)
-	})
-}
-
-// InsertLogsAndLastProcessedBlock atomically persists logs and advances the
-// last-processed-block checkpoint. If either write fails, BoltDB rolls back
-// the complete transaction.
-func (p *BoltDBEventTrackerStore) InsertLogsAndLastProcessedBlock(
-	logs []*ethgo.Log, blockNumber uint64,
-) error {
-	return p.db.Update(func(tx *bolt.Tx) error {
-		if err := insertLogs(tx, logs); err != nil {
-			return err
-		}
-
-		return tx.Bucket(petLastProcessedBlockBucket).Put(
-			petLastProcessedBlockKey, common.EncodeUint64ToBytes(blockNumber))
 	})
 }
 

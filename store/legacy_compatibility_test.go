@@ -74,7 +74,8 @@ func TestEventTrackerStore_WritesLegacyLayout(t *testing.T) {
 	log.BlockHash = ethgo.Hash{9}
 	log.TransactionHash = ethgo.Hash{8}
 
-	require.NoError(t, store.InsertLogsAndLastProcessedBlock([]*ethgo.Log{log}, 900))
+	require.NoError(t, store.InsertLogs([]*ethgo.Log{log}))
+	require.NoError(t, store.InsertLastProcessedBlock(900))
 	require.NoError(t, store.Close())
 
 	db, err := bolt.Open(dbPath, 0666, nil)
