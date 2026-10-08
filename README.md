@@ -27,7 +27,7 @@ It is a log indexer, and nothing more. It does not follow the chain block by blo
 
 ## How it works
 
-On every poll interval the tracker performs one cycle:
+The tracker runs one cycle on start, then another one each time `PollInterval` passes after the previous cycle ends. Each cycle does the following:
 
 1. It determines `confirmedTo`, the last block whose logs are safe to read. This costs one rpc call, and which call it is depends on `ConfirmationStrategy`.
 2. It reads the last processed block from the store. That value is the checkpoint, and it means that logs up to and including that block were already delivered.
@@ -41,9 +41,9 @@ On every poll interval the tracker performs one cycle:
 | Strategy | Boundary | Rpc call |
 | --- | --- | --- |
 | `numBlockConfirmations` | latest block minus `NumBlockConfirmations` | `eth_blockNumber` |
-| `finalized` | the block the chain itself reports as finalized | `eth_getBlockByNumber("finalized")` |
+| `finalized` | finalized block minus `NumBlockConfirmations` | `eth_getBlockByNumber("finalized")` |
 
-The default is `numBlockConfirmations`, which keeps working on chains that do not report finality. With `finalized`, `NumBlockConfirmations` is not applied, since such a block is already final, and the boundary lags further behind the head in exchange for a guarantee from consensus instead of an assumption. Not every chain and not every node supports that block tag. A node that does not support it answers with a null block and no error, and the tracker turns that into an error rather than treating the boundary as block zero.
+The default is `numBlockConfirmations`, which keeps working on chains that do not report finality. With `finalized`, the boundary lags further behind the head in exchange for a guarantee from consensus instead of an assumption. `NumBlockConfirmations` is still counted back from the finalized block, as an extra margin on chains whose finality you do not fully trust. Set it to zero to read up to the finalized block itself. Not every chain and not every node supports that block tag. A node that does not support it answers with a null block and no error, and the tracker turns that into an error rather than treating the boundary as block zero.
 
 Once it is caught up, a cycle costs two rpc calls: one for the boundary and one for the logs.
 
@@ -114,7 +114,7 @@ Event Tracker is just a library, and is currently not intended to be used as a s
 
 Our recommendations are:
 - `ConfirmationStrategy` - leave it unset, or set it to `numBlockConfirmations`, unless the tracked chain reports finality and you prefer that guarantee over a shorter delay.
-- `NumBlockConfirmations` - set this to the number of blocks you feel are enough to consider a block final on the tracked chain, meaning that it will not be replaced in a reorg. It is only used by the `numBlockConfirmations` strategy.
+- `NumBlockConfirmations` - set this to the number of blocks you feel are enough to consider a block final on the tracked chain, meaning that it will not be replaced in a reorg. Both strategies apply it: `numBlockConfirmations` counts it back from the latest block, and `finalized` from the finalized block. With `finalized` it is usually zero, or a small extra margin.
 - `SyncBatchSize` - this is how many blocks one `eth_getLogs` call covers, so keep it under whatever range your node accepts, and remember that a wider range means fewer calls but a bigger response. It has to be greater than zero.
 - `PollInterval` - should be configured to about the same as the block minting time on the tracked chain.
 - `StartBlockFromGenesis` - the block the tracker starts from when the stored checkpoint is behind it. It never moves the tracker backwards.

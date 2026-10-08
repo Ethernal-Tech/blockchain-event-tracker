@@ -272,6 +272,35 @@ func TestEventTracker_ProcessAvailableLogs_Finalized(t *testing.T) {
 
 	provider.On("GetBlockByNumber", ethgo.Finalized, false).
 		Return(&ethgo.Block{Number: 105}, nil).Once()
+	provider.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 102))).
+		Return([]*ethgo.Log{}, nil).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	require.NoError(t, eventTracker.processAvailableLogs(context.Background()))
+
+	// NumBlockConfirmations is counted back from the finalized block
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(102), lastProcessedBlock)
+
+	provider.AssertNotCalled(t, "BlockNumber")
+	provider.AssertExpectations(t)
+}
+
+func TestEventTracker_ProcessAvailableLogs_FinalizedWithoutConfirmations(t *testing.T) {
+	t.Parallel()
+
+	provider := new(mockProvider)
+	config := createTestTrackerConfig(t, 0, 10, provider)
+	config.ConfirmationStrategy = ConfirmationStrategyFinalized
+
+	trackerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, trackerStore.InsertLastProcessedBlock(100))
+
+	provider.On("GetBlockByNumber", ethgo.Finalized, false).
+		Return(&ethgo.Block{Number: 105}, nil).Once()
 	provider.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 105))).
 		Return([]*ethgo.Log{}, nil).Once()
 
@@ -280,12 +309,35 @@ func TestEventTracker_ProcessAvailableLogs_Finalized(t *testing.T) {
 
 	require.NoError(t, eventTracker.processAvailableLogs(context.Background()))
 
-	// NumBlockConfirmations is not applied on top of a finalized block
 	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
 	require.NoError(t, err)
 	require.Equal(t, uint64(105), lastProcessedBlock)
 
-	provider.AssertNotCalled(t, "BlockNumber")
+	provider.AssertExpectations(t)
+}
+
+func TestEventTracker_ProcessAvailableLogs_FinalizedBelowConfirmations(t *testing.T) {
+	t.Parallel()
+
+	provider := new(mockProvider)
+	config := createTestTrackerConfig(t, 3, 10, provider)
+	config.ConfirmationStrategy = ConfirmationStrategyFinalized
+
+	trackerStore := store.NewTestTrackerStore(t)
+
+	provider.On("GetBlockByNumber", ethgo.Finalized, false).
+		Return(&ethgo.Block{Number: 3}, nil).Once()
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	require.NoError(t, eventTracker.processAvailableLogs(context.Background()))
+
+	lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), lastProcessedBlock)
+
+	provider.AssertNotCalled(t, "GetLogs", mock.Anything)
 	provider.AssertExpectations(t)
 }
 

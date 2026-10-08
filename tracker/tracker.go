@@ -40,8 +40,9 @@ const (
 	// It does not rely on the tracked chain reporting finality.
 	ConfirmationStrategyNumBlockConfirmations ConfirmationStrategy = "numBlockConfirmations"
 
-	// ConfirmationStrategyFinalized uses the finalized block reported by the tracked
-	// chain. NumBlockConfirmations is not applied, since such a block is already final.
+	// ConfirmationStrategyFinalized derives the confirmed block from the finalized block
+	// reported by the tracked chain, reduced by NumBlockConfirmations. Set
+	// NumBlockConfirmations to zero to process logs up to the finalized block itself.
 	ConfirmationStrategyFinalized ConfirmationStrategy = "finalized"
 )
 
@@ -61,7 +62,8 @@ type EventTrackerConfig struct {
 	// is not expected to reach below it.
 	// (e.g., NumBlockConfirmations = 3, and if the latest block on the tracked chain is 10,
 	// logs are processed up to and including block 7)
-	// It is only used by ConfirmationStrategyNumBlockConfirmations.
+	// It is applied by every confirmation strategy. With ConfirmationStrategyFinalized it
+	// is counted back from the finalized block instead of the latest one.
 	NumBlockConfirmations uint64 `json:"numBlockConfirmations"`
 
 	// SyncBatchSize defines how many blocks one getLogs call covers, so it has to stay
@@ -249,23 +251,26 @@ func (e *EventTracker) lastProcessedBlock() uint64 {
 }
 
 // trackLogs processes all currently confirmed log ranges, then polls for new
-// confirmed ranges until the context is cancelled.
+// confirmed ranges until the context is cancelled. The poll interval is measured
+// from the end of the previous cycle, so a slow rpc does not trigger back to back cycles.
 func (e *EventTracker) trackLogs(ctx context.Context) error {
 	if err := e.processAvailableLogs(ctx); err != nil {
 		return err
 	}
 
-	ticker := time.NewTicker(e.config.PollInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(e.config.PollInterval)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-timer.C:
 			if err := e.processAvailableLogs(ctx); err != nil {
 				return err
 			}
+
+			timer.Reset(e.config.PollInterval)
 		}
 	}
 }
@@ -275,6 +280,21 @@ func (e *EventTracker) trackLogs(ctx context.Context) error {
 // confirmation strategy. It returns zero when the tracked chain does not have
 // such a block yet.
 func (e *EventTracker) getConfirmedToBlock() (uint64, error) {
+	referenceBlock, err := e.getReferenceBlock()
+	if err != nil {
+		return 0, err
+	}
+
+	if referenceBlock <= e.config.NumBlockConfirmations {
+		return 0, nil
+	}
+
+	return referenceBlock - e.config.NumBlockConfirmations, nil
+}
+
+// getReferenceBlock returns the block that NumBlockConfirmations is counted back from:
+// the finalized block for ConfirmationStrategyFinalized, and the latest block otherwise.
+func (e *EventTracker) getReferenceBlock() (uint64, error) {
 	if e.config.ConfirmationStrategy == ConfirmationStrategyFinalized {
 		finalizedBlock, err := getBlockByNumber(e.config.Provider, ethgo.Finalized)
 		if err != nil {
@@ -284,16 +304,7 @@ func (e *EventTracker) getConfirmedToBlock() (uint64, error) {
 		return finalizedBlock.Number, nil
 	}
 
-	latestBlock, err := e.config.Provider.BlockNumber()
-	if err != nil {
-		return 0, err
-	}
-
-	if latestBlock <= e.config.NumBlockConfirmations {
-		return 0, nil
-	}
-
-	return latestBlock - e.config.NumBlockConfirmations, nil
+	return e.config.Provider.BlockNumber()
 }
 
 // processAvailableLogs processes logs after the persisted checkpoint and up to
