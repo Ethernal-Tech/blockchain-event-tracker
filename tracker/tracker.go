@@ -21,10 +21,9 @@ type EventSubscriber interface {
 }
 
 // Provider is everything the tracker needs from a node on the tracked chain.
-// BlockNumber reports the latest block, GetBlockByNumber resolves a block tag such
-// as finalized, and the remaining two retrieve the logs and identify the chain.
+// GetBlockByNumber resolves the latest or finalized block, and the remaining two
+// retrieve the logs and identify the chain.
 type Provider interface {
-	BlockNumber() (uint64, error)
 	GetBlockByNumber(i ethgo.BlockNumber, full bool) (*ethgo.Block, error)
 	GetLogs(filter *ethgo.LogFilter) ([]*ethgo.Log, error)
 	ChainID() (*big.Int, error)
@@ -35,10 +34,10 @@ type Provider interface {
 type ConfirmationStrategy string
 
 const (
-	// ConfirmationStrategyNumBlockConfirmations derives the confirmed block from the
+	// ConfirmationStrategyLatest derives the confirmed block from the
 	// latest block on the tracked chain, reduced by NumBlockConfirmations.
 	// It does not rely on the tracked chain reporting finality.
-	ConfirmationStrategyNumBlockConfirmations ConfirmationStrategy = "numBlockConfirmations"
+	ConfirmationStrategyLatest ConfirmationStrategy = "latest"
 
 	// ConfirmationStrategyFinalized derives the confirmed block from the finalized block
 	// reported by the tracked chain, reduced by NumBlockConfirmations. Set
@@ -52,7 +51,7 @@ type EventTrackerConfig struct {
 	RPCEndpoint string `json:"rpcEndpoint"`
 
 	// ConfirmationStrategy defines how the confirmed block is determined.
-	// An empty value defaults to ConfirmationStrategyNumBlockConfirmations,
+	// An empty value defaults to ConfirmationStrategyLatest,
 	// which keeps the behavior of configurations that do not set this field.
 	ConfirmationStrategy ConfirmationStrategy `json:"confirmationStrategy"`
 
@@ -149,10 +148,10 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 	}
 
 	if config.ConfirmationStrategy == "" {
-		config.ConfirmationStrategy = ConfirmationStrategyNumBlockConfirmations
+		config.ConfirmationStrategy = ConfirmationStrategyLatest
 	}
 
-	if config.ConfirmationStrategy != ConfirmationStrategyNumBlockConfirmations &&
+	if config.ConfirmationStrategy != ConfirmationStrategyLatest &&
 		config.ConfirmationStrategy != ConfirmationStrategyFinalized {
 		return nil, fmt.Errorf("unknown confirmation strategy: %s", config.ConfirmationStrategy)
 	}
@@ -295,16 +294,17 @@ func (e *EventTracker) getConfirmedToBlock() (uint64, error) {
 // getReferenceBlock returns the block that NumBlockConfirmations is counted back from:
 // the finalized block for ConfirmationStrategyFinalized, and the latest block otherwise.
 func (e *EventTracker) getReferenceBlock() (uint64, error) {
+	blockNumber := ethgo.Latest
 	if e.config.ConfirmationStrategy == ConfirmationStrategyFinalized {
-		finalizedBlock, err := getBlockByNumber(e.config.Provider, ethgo.Finalized)
-		if err != nil {
-			return 0, err
-		}
-
-		return finalizedBlock.Number, nil
+		blockNumber = ethgo.Finalized
 	}
 
-	return e.config.Provider.BlockNumber()
+	block, err := getBlockByNumber(e.config.Provider, blockNumber)
+	if err != nil {
+		return 0, err
+	}
+
+	return block.Number, nil
 }
 
 // processAvailableLogs processes logs after the persisted checkpoint and up to

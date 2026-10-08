@@ -40,7 +40,7 @@ The tracker runs one cycle on start, then another one each time `PollInterval` p
 
 | Strategy | Boundary | Rpc call |
 | --- | --- | --- |
-| `numBlockConfirmations` | latest block minus `NumBlockConfirmations` | `eth_blockNumber` |
+| `numBlockConfirmations` | latest block minus `NumBlockConfirmations` | `eth_getBlockByNumber("latest")` |
 | `finalized` | finalized block minus `NumBlockConfirmations` | `eth_getBlockByNumber("finalized")` |
 
 The default is `numBlockConfirmations`, which keeps working on chains that do not report finality. With `finalized`, the boundary lags further behind the head in exchange for a guarantee from consensus instead of an assumption. `NumBlockConfirmations` is still counted back from the finalized block, as an extra margin on chains whose finality you do not fully trust. Set it to zero to read up to the finalized block itself. Not every chain and not every node supports that block tag. A node that does not support it answers with a null block and no error, and the tracker turns that into an error rather than treating the boundary as block zero.

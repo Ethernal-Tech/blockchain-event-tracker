@@ -36,7 +36,7 @@ func TestEventTracker_ResumesFromLegacyDatabase(t *testing.T) {
 	config := createTestTrackerConfig(t, 3, 20, providerMock)
 	config.EventSubscriber = subscriber
 
-	providerMock.On("BlockNumber").Return(uint64(125), nil).Once()
+	providerMock.On("GetBlockByNumber", ethgo.Latest, false).Return(&ethgo.Block{Number: 125}, nil).Once()
 	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 120))).
 		Return([]*ethgo.Log{alreadyStoredLog, newLog}, nil).Once()
 	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(121, 122))).

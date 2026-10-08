@@ -42,13 +42,6 @@ type mockProvider struct {
 	mock.Mock
 }
 
-// BlockNumber implements tracker.Provider.
-func (m *mockProvider) BlockNumber() (uint64, error) {
-	args := m.Called()
-
-	return args.Get(0).(uint64), args.Error(1) //nolint:forcetypeassert
-}
-
 func matchesLogRange(fromBlock, toBlock uint64) func(*ethgo.LogFilter) bool {
 	return func(filter *ethgo.LogFilter) bool {
 		return filter.From != nil && uint64(*filter.From) == fromBlock &&
@@ -151,7 +144,7 @@ func TestNewEventTracker(t *testing.T) {
 
 		_, err := NewEventTracker(config, store.NewTestTrackerStore(t))
 		require.NoError(t, err)
-		require.Equal(t, ConfirmationStrategyNumBlockConfirmations, config.ConfirmationStrategy)
+		require.Equal(t, ConfirmationStrategyLatest, config.ConfirmationStrategy)
 	})
 
 	t.Run("creates a tracker with the finalized strategy", func(t *testing.T) {
@@ -168,10 +161,10 @@ func TestNewEventTracker(t *testing.T) {
 		t.Parallel()
 
 		config := createTestTrackerConfig(t, 3, 4, nil)
-		config.ConfirmationStrategy = "latest"
+		config.ConfirmationStrategy = "unknown"
 
 		_, err := NewEventTracker(config, store.NewTestTrackerStore(t))
-		require.ErrorContains(t, err, "unknown confirmation strategy: latest")
+		require.ErrorContains(t, err, "unknown confirmation strategy: unknown")
 	})
 
 	t.Run("returns error when sync batch size is zero", func(t *testing.T) {
@@ -193,7 +186,7 @@ func TestEventTracker_ProcessAvailableLogs(t *testing.T) {
 	trackerStore := store.NewTestTrackerStore(t)
 	require.NoError(t, trackerStore.InsertLastProcessedBlock(90))
 
-	provider.On("BlockNumber").Return(uint64(105), nil).Once()
+	provider.On("GetBlockByNumber", ethgo.Latest, false).Return(&ethgo.Block{Number: 105}, nil).Once()
 
 	provider.On("GetLogs", mock.MatchedBy(matchesLogRange(91, 94))).Return([]*ethgo.Log{}, nil).Once()
 	provider.On("GetLogs", mock.MatchedBy(matchesLogRange(95, 98))).Return([]*ethgo.Log{}, nil).Once()
@@ -208,7 +201,7 @@ func TestEventTracker_ProcessAvailableLogs(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(102), lastProcessedBlock)
 
-	provider.AssertNotCalled(t, "GetBlockByNumber", mock.Anything, mock.Anything)
+	provider.AssertNotCalled(t, "GetBlockByNumber", ethgo.Finalized, mock.Anything)
 	provider.AssertExpectations(t)
 }
 
@@ -220,7 +213,7 @@ func TestEventTracker_ProcessAvailableLogs_InsufficientChainHeight(t *testing.T)
 
 	trackerStore := store.NewTestTrackerStore(t)
 
-	provider.On("BlockNumber").Return(uint64(3), nil).Once()
+	provider.On("GetBlockByNumber", ethgo.Latest, false).Return(&ethgo.Block{Number: 3}, nil).Once()
 
 	eventTracker, err := NewEventTracker(config, trackerStore)
 	require.NoError(t, err)
@@ -244,7 +237,7 @@ func TestEventTracker_ProcessAvailableLogs_StartBlockFromGenesis(t *testing.T) {
 
 	trackerStore := store.NewTestTrackerStore(t)
 
-	provider.On("BlockNumber").Return(uint64(58), nil).Once()
+	provider.On("GetBlockByNumber", ethgo.Latest, false).Return(&ethgo.Block{Number: 58}, nil).Once()
 	provider.On("GetLogs", mock.MatchedBy(matchesLogRange(51, 55))).
 		Return([]*ethgo.Log{}, nil).Once()
 
@@ -285,7 +278,7 @@ func TestEventTracker_ProcessAvailableLogs_Finalized(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(102), lastProcessedBlock)
 
-	provider.AssertNotCalled(t, "BlockNumber")
+	provider.AssertNotCalled(t, "GetBlockByNumber", ethgo.Latest, mock.Anything)
 	provider.AssertExpectations(t)
 }
 
@@ -377,7 +370,7 @@ func TestEventTracker_ProcessAvailableLogs_BlockNumberError(t *testing.T) {
 	trackerStore := store.NewTestTrackerStore(t)
 	require.NoError(t, trackerStore.InsertLastProcessedBlock(90))
 
-	provider.On("BlockNumber").Return(uint64(0), errors.New("rpc down")).Once()
+	provider.On("GetBlockByNumber", ethgo.Latest, false).Return(nil, errors.New("rpc down")).Once()
 
 	eventTracker, err := NewEventTracker(config, trackerStore)
 	require.NoError(t, err)
@@ -735,7 +728,7 @@ func TestEventTracker_Start_FailedCheckpointWriteDoesNotRedeliverLogs(t *testing
 	secondLog.BlockHash = ethgo.Hash{3}
 	secondLog.TransactionHash = ethgo.Hash{4}
 
-	providerMock.On("BlockNumber").Return(uint64(123), nil)
+	providerMock.On("GetBlockByNumber", ethgo.Latest, false).Return(&ethgo.Block{Number: 123}, nil)
 	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 120))).
 		Return([]*ethgo.Log{firstLog, secondLog}, nil)
 
@@ -779,7 +772,7 @@ func TestEventTracker_ProcessAvailableLogs_ResumesFromOldCheckpoint(t *testing.T
 	trackerStore := store.NewTestTrackerStore(t)
 	require.NoError(t, trackerStore.InsertLastProcessedBlock(50))
 
-	providerMock.On("BlockNumber").Return(uint64(105), nil).Once()
+	providerMock.On("GetBlockByNumber", ethgo.Latest, false).Return(&ethgo.Block{Number: 105}, nil).Once()
 	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(51, 80))).
 		Return([]*ethgo.Log{}, nil).Once()
 	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(81, 102))).
@@ -806,7 +799,7 @@ func TestEventTracker_TrackLogs_StopsOnCancelledContext(t *testing.T) {
 	trackerStore := store.NewTestTrackerStore(t)
 	require.NoError(t, trackerStore.InsertLastProcessedBlock(100))
 
-	providerMock.On("BlockNumber").Return(uint64(101), nil).Once()
+	providerMock.On("GetBlockByNumber", ethgo.Latest, false).Return(&ethgo.Block{Number: 101}, nil).Once()
 
 	eventTracker, err := NewEventTracker(config, trackerStore)
 	require.NoError(t, err)
