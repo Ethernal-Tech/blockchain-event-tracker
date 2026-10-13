@@ -67,6 +67,12 @@ func NewBoltDBEventTrackerStore(dbPath string) (*BoltDBEventTrackerStore, error)
 	return &BoltDBEventTrackerStore{db: db}, nil
 }
 
+// Close releases the database file, so that another process, or another store
+// instance, can open it.
+func (p *BoltDBEventTrackerStore) Close() error {
+	return p.db.Close()
+}
+
 // GetLastProcessedBlock retrieves the last processed block number from a BoltDB database.
 //
 // Example Usage:
@@ -131,24 +137,28 @@ func (p *BoltDBEventTrackerStore) InsertLastProcessedBlock(lastProcessedBlockNum
 //   - error: If an error occurs during the insertion process, it is returned. Otherwise, nil is returned.
 func (p *BoltDBEventTrackerStore) InsertLogs(logs []*ethgo.Log) error {
 	return p.db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(petLogsBucket)
+		return insertLogs(tx, logs)
+	})
+}
 
-		for _, log := range logs {
-			raw, err := json.Marshal(log)
-			if err != nil {
-				return err
-			}
+func insertLogs(tx *bolt.Tx, logs []*ethgo.Log) error {
+	bucket := tx.Bucket(petLogsBucket)
 
-			logKey := bytes.Join([][]byte{
-				common.EncodeUint64ToBytes(log.BlockNumber),
-				common.EncodeUint64ToBytes(log.LogIndex)}, nil)
-			if err := bucket.Put(logKey, raw); err != nil {
-				return err
-			}
+	for _, log := range logs {
+		raw, err := json.Marshal(log)
+		if err != nil {
+			return err
 		}
 
-		return nil
-	})
+		logKey := bytes.Join([][]byte{
+			common.EncodeUint64ToBytes(log.BlockNumber),
+			common.EncodeUint64ToBytes(log.LogIndex)}, nil)
+		if err := bucket.Put(logKey, raw); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // GetLogsByBlockNumber retrieves all logs that happened in given block from a BoltDB database.
