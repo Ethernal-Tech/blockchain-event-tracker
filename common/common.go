@@ -23,12 +23,13 @@ func EncodeBytesToUint64(b []byte) uint64 {
 }
 
 // RetryForever will execute a function until it completes without error or
-// the context is cancelled or expired.
+// the context is cancelled or expired. Only ctx decides when to stop: an error that
+// wraps context.DeadlineExceeded from some inner call is retried like any other.
 func RetryForever(ctx context.Context, interval time.Duration, fn func(context.Context) error) {
 	_ = retry.Do(ctx, retry.NewConstant(interval), func(context.Context) error {
-		// Execute function and end retries if no error or context done
+		// Execute function and end retries if no error or ctx itself is done
 		err := fn(ctx)
-		if err == nil || IsContextDone(err) {
+		if err == nil || ctx.Err() != nil {
 			return nil
 		}
 
@@ -37,8 +38,9 @@ func RetryForever(ctx context.Context, interval time.Duration, fn func(context.C
 	})
 }
 
-// IsContextDone returns true if the error is due to the context being cancelled
-// or expired. This is useful for determining if a function should retry.
+// IsContextDone returns true if the error wraps context.Canceled or context.DeadlineExceeded.
+// The error may come from any inner context, so to decide whether to stop retrying,
+// check the caller's own context with ctx.Err() instead.
 func IsContextDone(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

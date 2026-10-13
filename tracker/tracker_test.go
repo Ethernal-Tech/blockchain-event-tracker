@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"testing"
@@ -853,4 +854,76 @@ func createTestTrackerConfigInvalidSub(t *testing.T,
 		EventSubscriber: nil,
 		Provider:        new(mockProvider),
 	}
+}
+
+func TestEventTracker_Start_RetriesSubscriberDeadline(t *testing.T) {
+	t.Parallel()
+
+	providerMock := new(mockProvider)
+	subscriber := &mockEventSubscriber{
+		addLogErrors: []error{fmt.Errorf("db call timed out: %w", context.DeadlineExceeded)},
+	}
+	config := createTestTrackerConfig(t, 0, 20, providerMock)
+	config.EventSubscriber = subscriber
+
+	trackerStore := store.NewTestTrackerStore(t)
+	require.NoError(t, trackerStore.InsertLastProcessedBlock(100))
+
+	log := store.CreateTestLogForStateSyncEvent(t, 101, 0)
+
+	providerMock.On("GetBlockByNumber", ethgo.Latest, false).Return(&ethgo.Block{Number: 101}, nil)
+	providerMock.On("GetLogs", mock.MatchedBy(matchesLogRange(101, 101))).Return([]*ethgo.Log{log}, nil)
+
+	eventTracker, err := NewEventTracker(config, trackerStore)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+
+	go func() {
+		eventTracker.Start(ctx)
+		close(stopped)
+	}()
+
+	// the first AddLog fails with an inner deadline, the retry a second later delivers the log
+	require.Eventually(t, func() bool {
+		lastProcessedBlock, err := trackerStore.GetLastProcessedBlock()
+
+		return err == nil && lastProcessedBlock == 101
+	}, 5*time.Second, 50*time.Millisecond)
+
+	select {
+	case <-stopped:
+		t.Fatal("tracker stopped although its context was not cancelled")
+	default:
+	}
+
+	cancel()
+	<-stopped
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
+func TestEventTracker_Start_KeepsSuppliedProviderOnTimeout(t *testing.T) {
+	t.Parallel()
+
+	providerMock := new(mockProvider)
+	config := createTestTrackerConfig(t, 0, 20, providerMock)
+
+	providerMock.On("GetBlockByNumber", ethgo.Latest, false).Return(nil, error(timeoutError{}))
+
+	eventTracker, err := NewEventTracker(config, store.NewTestTrackerStore(t))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	eventTracker.Start(ctx)
+
+	require.Same(t, providerMock, config.Provider)
+	require.Nil(t, config.RPCClient)
 }

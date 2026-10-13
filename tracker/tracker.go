@@ -106,6 +106,10 @@ type EventTracker struct {
 	store eventStore.EventTrackerStore
 
 	chainID *big.Int
+
+	// ownsProvider is true when the tracker created the provider itself, so it may
+	// recreate it after a timeout. A provider supplied in the config is never replaced.
+	ownsProvider bool
 }
 
 // NewEventTracker is a constructor function that creates a new instance of the EventTracker struct.
@@ -170,6 +174,8 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 	}
 
 	// if the provider is not provided externally, we can start the ethgo one
+	ownsProvider := config.Provider == nil
+
 	if err := setupProvider(config, false); err != nil {
 		return nil, err
 	}
@@ -184,9 +190,10 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 	}
 
 	return &EventTracker{
-		config:  config,
-		store:   store,
-		chainID: chainID,
+		config:       config,
+		store:        store,
+		chainID:      chainID,
+		ownsProvider: ownsProvider,
 	}, nil
 }
 
@@ -204,7 +211,7 @@ func (e *EventTracker) Start(ctx context.Context) {
 
 		var netErr net.Error
 
-		if errors.As(err, &netErr) && netErr.Timeout() {
+		if e.ownsProvider && errors.As(err, &netErr) && netErr.Timeout() {
 			e.config.Logger.Warn("Timeout error occurred; attempting to recreate connection", "err", err)
 
 			if serr := setupProvider(e.config, true); serr != nil {
