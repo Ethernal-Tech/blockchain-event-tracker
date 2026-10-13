@@ -51,7 +51,7 @@ Once it is caught up, a cycle costs two rpc calls: one for the boundary and one 
 
 - **Confirmed log delivery**: only blocks below the confirmation boundary are read, so your application is not exposed to the unstable tip of the chain.
 
-- **Durable checkpoints**: logs and the checkpoint are written in one transaction, so a crash can not advance the checkpoint past logs that were never stored.
+- **Durable checkpoints**: each log is stored right after it is delivered, and the checkpoint moves only once every log of the step is stored, so a crash can not advance the checkpoint past logs that were never stored.
 
 - **Resumes where it stopped**: on start it continues from the stored checkpoint, and syncs up every confirmed block it missed, however long it was down.
 
