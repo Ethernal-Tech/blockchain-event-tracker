@@ -90,6 +90,7 @@ Event Tracker is just a library, and is currently not intended to be used as a s
      "numBlockConfirmations": 5,
      "syncBatchSize": 10,
      "pollInterval": 2000000000,
+     "rpcTimeout": 30000000000,
      "startBlockFromGenesis": 0,
      "logFilter": {
        "0xContractAddress": ["0xEventSig1", "0xEventSig2"]
@@ -97,7 +98,7 @@ Event Tracker is just a library, and is currently not intended to be used as a s
    }
    ```
 
-   Note that `pollInterval` is a `time.Duration`, so in json it is a number of nanoseconds, and that `logFilter` is a map keyed by contract address.
+   Note that `pollInterval` and `rpcTimeout` are `time.Duration`, so in json they are a number of nanoseconds, and that `logFilter` is a map keyed by contract address.
 
 2. Or you can just specify the configuration in code:
 
@@ -117,10 +118,11 @@ Our recommendations are:
 - `NumBlockConfirmations` - set this to the number of blocks you feel are enough to consider a block final on the tracked chain, meaning that it will not be replaced in a reorg. Both strategies apply it: `latest` counts it back from the latest block, and `finalized` from the finalized block. With `finalized` it is usually zero, or a small extra margin.
 - `SyncBatchSize` - this is how many blocks one `eth_getLogs` call covers, so keep it under whatever range your node accepts, and remember that a wider range means fewer calls but a bigger response. It has to be greater than zero.
 - `PollInterval` - should be configured to about the same as the block minting time on the tracked chain.
+- `RPCTimeout` - the longest a single json rpc call may take over an `http(s)` `RPCEndpoint`, including reading the response. A call that takes longer fails and the cycle is retried, so a node that stops answering can not block the tracker, or its shutdown. Defaults to 30 seconds. Keep it above the time your node needs to answer `eth_getLogs` for one `SyncBatchSize` range. It does not apply to `ws` or `ipc` endpoints.
 - `StartBlockFromGenesis` - the block the tracker starts from when the stored checkpoint is behind it. It never moves the tracker backwards.
 - `Logger` - you can pass your own logger here, as long as it implements the `Logger` interface from `go-hclog`.
 - `Store` - you can pass your own store (as long as it implements the `EventTrackerStore` interface), or use the provided `BoltDBEventTrackerStore` from this repo, that creates and uses a `BoltDB` instance to store the tracked events and the checkpoint.
-- `Provider` - it's basically a json rpc client connected to the provided public node (`RPCEndpoint`), used to poll block and event data from tracked blockchain. When it is left unset, the tracker creates one for `RPCEndpoint` itself.
+- `Provider` - it's basically a json rpc client connected to the provided public node (`RPCEndpoint`), used to poll block and event data from tracked blockchain. When it is left unset, the tracker creates one for `RPCEndpoint` itself: its own http client, bounded by `RPCTimeout`, for an `http(s)` endpoint, and the ethgo client for a `ws` or `ipc` endpoint. A `Provider` you pass in is used as it is, so bounding its calls is up to you.
 - `EventSubscriber` - here you plugin your custom code for handling tracked events. It has to tolerate receiving the same log more than once.
 - `LogFilter` - here you configure which events (logs) on which contracts are going to be tracked. This is a map, where key is the contract address, and values are event signatures (event signatures are just hashed signatures of events, for example, if we have an event like this:
     ```solidity

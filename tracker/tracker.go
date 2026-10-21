@@ -76,6 +76,12 @@ type EventTrackerConfig struct {
 	// for latest block on the tracked chain.
 	PollInterval time.Duration `json:"pollInterval"`
 
+	// RPCTimeout bounds every json rpc call the tracker makes over an http(s) RPCEndpoint,
+	// from sending the request to reading the whole response. A call that takes longer fails
+	// and the cycle is retried. When it is zero, 30 seconds is used. It does not apply to
+	// ws or ipc endpoints, nor to a Provider set in the config.
+	RPCTimeout time.Duration `json:"rpcTimeout"`
+
 	// LogFilter defines which events are tracked and from which contracts on the tracked chain
 	LogFilter map[ethgo.Address][]ethgo.Hash `json:"logFilter"`
 
@@ -86,11 +92,13 @@ type EventTrackerConfig struct {
 	// Logger is the logger instance for event tracker
 	Logger hcf.Logger `json:"-"`
 
-	// Provider returns blocks and logs from the tracked chain. When it is not set,
-	// the tracker creates an ethgo json rpc client for RPCEndpoint.
+	// Provider returns blocks and logs from the tracked chain. When it is not set, the tracker
+	// creates one for RPCEndpoint: its own http client, bounded by RPCTimeout, for an http(s)
+	// endpoint, and the ethgo json rpc client for a ws or ipc endpoint.
 	Provider Provider `json:"-"`
 
-	// Client is the jsonrpc client
+	// RPCClient is the ethgo json rpc client the tracker created for a ws or ipc RPCEndpoint.
+	// It is nil for an http(s) endpoint.
 	RPCClient *jsonrpc.Client `json:"-"`
 
 	// EventSubscriber is the subscriber that requires events tracked by the event tracker
@@ -164,6 +172,10 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		config.PollInterval = 3 * time.Second
 	}
 
+	if config.RPCTimeout == 0 {
+		config.RPCTimeout = defaultRPCTimeout
+	}
+
 	if store == nil {
 		var err error
 
@@ -173,7 +185,7 @@ func NewEventTracker(config *EventTrackerConfig, store eventStore.EventTrackerSt
 		}
 	}
 
-	// if the provider is not provided externally, we can start the ethgo one
+	// if the provider is not provided externally, the tracker creates its own
 	ownsProvider := config.Provider == nil
 
 	if err := setupProvider(config, false); err != nil {
@@ -488,9 +500,9 @@ func (e *EventTracker) getLogsQuery(from, to uint64) *ethgo.LogFilter {
 
 // setupProvider initializes or resets the Provider for the EventTrackerConfig.
 // If the Provider is already set and the force flag is false, it does nothing.
-// Otherwise, it ensures the RPCClient is properly closed (if it exists) and creates a new
-// JSON-RPC client using the provided RPCEndpoint. The newly created client is then used
-// to set up the Provider.
+// Otherwise, it closes the previous RPCClient (if it exists) and creates a new provider
+// for RPCEndpoint: an http provider bounded by RPCTimeout for an http(s) endpoint, and
+// the ethgo json rpc client, which has no call timeout, for a ws or ipc endpoint.
 //
 // Input:
 //   - config (*EventTrackerConfig): A pointer to EventTrackerConfig containing the configuration details.
@@ -505,6 +517,13 @@ func setupProvider(config *EventTrackerConfig, force bool) error {
 
 	if config.RPCClient != nil {
 		_ = config.RPCClient.Close() // try to close the previous transfer
+		config.RPCClient = nil
+	}
+
+	if isHTTPEndpoint(config.RPCEndpoint) {
+		config.Provider = newHTTPProvider(config.RPCEndpoint, config.RPCTimeout)
+
+		return nil
 	}
 
 	clt, err := jsonrpc.NewClient(config.RPCEndpoint)
